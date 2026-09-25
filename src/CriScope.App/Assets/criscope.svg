@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>CriScope — audio observatory</title>
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="#11161c"/>
+  <rect x="48" y="94" width="24" height="68" rx="12" fill="#74cbc2"/>
+  <rect x="94" y="48" width="24" height="160" rx="12" fill="#74cbc2"/>
+  <rect x="140" y="72" width="24" height="112" rx="12" fill="#ad96d6"/>
+  <rect x="186" y="106" width="24" height="44" rx="12" fill="#74cbc2"/>
+</svg>

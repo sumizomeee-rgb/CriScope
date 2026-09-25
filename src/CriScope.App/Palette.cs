@@ -16,5 +16,9 @@ internal sealed class Palette(bool light)
     public IBrush Selection => B(Light ? "#7255A0" : "#AD96D6");
     public IBrush Error => B(Light ? "#B73C45" : "#EC8790");
     public IBrush Good => B(Light ? "#357B69" : "#83BDA8");
+    public IBrush Voice => B(Light ? "#267E85" : "#74CBC2");
+    public IBrush Request => B(Light ? "#A36D20" : "#E6BA78");
+    public IBrush Listener => B(Light ? "#386FB5" : "#88B5F6");
+    public IBrush Hover => B(Light ? "#E6E0D5" : "#25303D");
     private static IBrush B(string color) => Brush.Parse(color);
 }

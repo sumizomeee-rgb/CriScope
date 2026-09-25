@@ -5,6 +5,10 @@ namespace CriScope.Core;
 public sealed class WireEvent
 {
     public string kind { get; set; } = "";
+    public string source { get; set; } = "";
+    public string parentId { get; set; } = "";
+    public string entity { get; set; } = "";
+    public string raw { get; set; } = "";
     public string session { get; set; } = "";
     public long seq { get; set; }
     public double time { get; set; }

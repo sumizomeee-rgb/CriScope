@@ -1,100 +1,79 @@
-# CriScope/1 协议
+# CriScope 数据与 Agent 接口
 
-本文描述当前实现。所有接收与查询端点仅绑定本机回环地址；会话 ID 是来源隔离标识，不是身份认证凭据。不要将端口转发到其他设备或公网。
+## 原生采集
 
-## TCP 传输
+桌面主动连接配置的 CRI Monitor TCP 地址（默认 `127.0.0.1:2002`），发送 VERSION 与 START_LOG_RECORD，结束时尽力发送有超时限制的 STOP_LOG_RECORD。解析器支持已验证的 32/64 位大端帧布局，拒绝非法帧长度；未识别参数保留诊断，不以猜测值填充图表。接口为逆向观察得到的版本相关实现，不是官方兼容性承诺。
 
-游戏端连接 `127.0.0.1:18961`。编码为 UTF-8，无 BOM；每个 JSON 对象独占一行，以 LF 结束，也接受 CRLF。当前实现单行上限为 65,536 个解码后的字符。
+会话来源为 `CRI Monitor`，事件 `source` 为 `cri-native`。Cue 请求使用 `request`，原生 Voice 使用 `play`/`stop` 并带 `entity=voice`。Voice 与 Playback 对象 ID 含采集段编号，避免重复开始采集后串联旧对象。`raw` 保存被解析的原生参数和来源，诊断中的原生 Block 请求不代表实际已跳转。
 
-连接首行必须是版本为 1 的握手；`session` 为本次桥接器实例的 GUID，重连必须复用它。
+## 可选 SDK TCP
 
-```json
-{"kind":"hello","session":"11111111222233334444555555555555","name":"My Game","platform":"WindowsEditor","pid":1234,"value":1}
-```
-
-相同会话重连时，名称、平台、PID 必须与原值一致。一个会话只保留一个活动连接，新连接替换旧连接。后续帧不允许再次发送 `hello` 或切换会话 ID。重新创建桥接器应生成新 GUID。
-
-协议 v1 约定桥接器仅在采集开启时连接，因此实时连接的合法 `hello` 同时表示采集开启。即使桌面接收器重启、游戏不再重发此前已确认的 `state=1`，重连握手也会恢复采集中状态。后续 `state=0` 显式表示关闭；历史文件的握手不据此开启实时采集。
-
-事件示例：
+Unity SDK 扩展连接 `127.0.0.1:18961`。UTF-8 JSONL，每行一个对象，首行示例：
 
 ```json
-{"kind":"play","session":"11111111222233334444555555555555","seq":1,"time":0.12,"name":"ExampleCue","objectId":"player-1","cue":123,"value":0,"detail":"业务播放请求","x":0,"y":0,"z":0,"pid":0,"platform":""}
+{"kind":"hello","session":"11111111222233334444555555555555","name":"CRI SDK","platform":"WindowsEditor","pid":1234,"value":1}
 ```
+
+同一连接只允许一个会话；重连复用 GUID、名称、平台和 PID。合法实时握手表示 SDK 采集开启，`state=0` 表示关闭。通用传输保留兼容性，但默认产品接入直接从 CRI SDK 观察，不要求业务打点。
 
 | 字段 | 含义 |
 | --- | --- |
-| `kind` | 事件类型；桌面按类型展示 |
-| `session` | 必须等于握手的来源 GUID |
-| `seq` | 本会话递增正整数；重传沿用原序号 |
-| `time` | 从桥接器创建开始计时的单调秒数，有限且非负 |
-| `name` | 事件、Cue、AISAC 或指标名称，最多 4,096 字符 |
-| `objectId` | 游戏侧对象标识，不应跨会话关联 |
-| `cue` | 游戏侧提供的 Cue 标识 |
-| `value` | AISAC、指标或状态数值 |
-| `detail` | 证据与语义说明，接收端最多 32,768 字符 |
-| `x/y/z` | 游戏侧提供的坐标 |
-| `pid/platform` | 来源元数据在握手中提供，普通事件不替换会话元数据 |
+| `kind` | 事件类型 |
+| `session` | 会话 ID |
+| `seq` | 会话递增正整数，重传沿用序号 |
+| `time` | 本来源单调秒数，不能直接跨来源比较 |
+| `name` | Cue、控制、指标或事件名 |
+| `objectId` / `parentId` / `entity` | 来源内的对象、父关联和实体类型 |
+| `source` | 事件来源 |
+| `cue` / `value` | Cue 标识及控制、指标或状态值 |
+| `detail` | 口径和诊断说明 |
+| `raw` | 原生解析参数的 JSON 字符串（若提供） |
+| `x/y/z` | 坐标 |
+| `pid/platform` | 握手中的进程与平台 |
 
-字段使用区分大小写的上述名称。未使用的字符串建议写空串；`name`、`detail` 不允许显式 `null`。通用 Unity 桥会自动填写 `session`、`seq`、`time`，并将详情截断至 2,048 字符。
+常用类型包括 `aisac`、`selector`、`bus`、`metric`、`position`、`beat`、`sequence`、`block`、`log`、`gap`。同名事件的意义仍需结合来源与 detail；尤其 SDK Block 是轮询观测，原生 Block 是请求。
 
-## 确认、重传与缺失
-
-接收器在握手及每个合法事件之后回复一行：
-
-```json
-{"ack":1}
-```
-
-`ack` 是该会话已接收的最大序号水位。客户端按顺序发送事件，序号小于或等于水位的重传不会重复入库。水位不是磁盘持久化承诺，也不是“之前所有序号连续无缺失”的保证；接收器允许因桥接队列溢出而跳号。
-
-通用桥保存最多 8,192 条待确认事件，断线后重试连接并重传未确认内容。队列溢出时产生 `gap` 证据。`gap.value` 表示桥接器报告的丢失或交付不确定数量，不能解释为精确的底层音频丢音数量。强制退出、尚未发送的关闭状态或桥接器销毁时超过收尾期限的事件均可能缺失。
-
-当前常用类型：
-
-| 类型 | 语义 |
-| --- | --- |
-| `state` | `value > 0` 为采集开启，否则关闭 |
-| `play` / `stop` | 业务观察到的播放／停止请求，不代表原生 Voice 状态 |
-| `aisac` | 观察到的 AISAC 写入，`name` 和 `value` 表示控制名与值 |
-| `metric` | 游戏提供的实际采样；单位及口径由名称与详情说明 |
-| `position` | 对象位置；显示依赖游戏采样覆盖范围 |
-| `log` | 游戏提供的诊断日志 |
-| `gap` | 传输缺失或交付不确定证据 |
+接收器回复 `{"ack":1}`，数字为已接收最大序号水位，不代表已落盘或此前序号连续。桥保存最多 8,192 条待确认事件，断线重传；溢出产生缺失证据。强制退出或超出异步收尾期限的数据可能缺失。不能把传输缺失解释成音频丢音数量。
 
 ## 录制
 
-`.criscope` 是 UTF-8 JSONL。第一行是版本 1 的 `hello`，其后是开始录制后接收的去重事件。录制不包含开始前的 Live 缓存，也不包含音频声音。停止录制会关闭并刷新文件；异常结束时最后一行可能不完整。
+`.criscope` 为 UTF-8 JSONL，首行为版本 1 的 hello，之后是开始录制后接收的去重事件。它不含音频，不补录此前 Live 缓存。正常停止刷新文件，异常退出可能留下不完整末行。
 
-Live 按 120 秒和 120,000 条事件限制保留窗口。历史加载不使用 Live 裁剪，但限制为每文件 2,000,000 条事件。损坏文件可能被拒绝；记录中的 `session` 必须保持一致。
+Live 窗口限制为 120 秒或 120,000 条；回放每文件最多 2,000,000 条。打开原生录制也保留来源字段。重复加载同 ID 来源可能导致查询歧义，需仅保留一个要查询的来源。
 
-## HTTP 只读查询
+## HTTP
 
-桌面运行时提供 `http://127.0.0.1:18962/`，仅接受 GET。带 `Origin` 请求头的请求被拒绝，不提供跨站浏览器读取或游戏控制能力。
+桌面 HTTP 仅绑定 `http://127.0.0.1:18962/`。带 Origin 的请求以及跨站 Fetch 请求被拒绝；不开放 CORS。POST 请求使用 `application/json`，正文最多 16 KiB。它是本机 Agent 能力，不是远程认证服务。
 
-| 路径 | 作用 |
+| 方法与路径 | 作用 |
 | --- | --- |
-| `/sessions` | 列出会话 ID、来源、连接／采集／录制状态、总数、丢失数、逐出数、水位和最新时间 |
-| `/events?session=...` | 查询事件，默认最多返回 200 条 |
-| `/summary?session=...` | 按事件类型汇总指定窗口，并报告覆盖边界 |
+| GET `/sessions` | 会话、Source、Endpoint、连接/采集/录制状态及计数 |
+| GET `/events?session=...` | 分页事件 |
+| GET `/summary?session=...` | 当前窗口类型计数和覆盖边界 |
+| GET `/ui/state` | 当前工作区、筛选、Live、所选会话等语义状态 |
+| GET `/screenshot` | 应用自身渲染的 PNG |
+| GET `/screenshot?panel=timeline` | 时间线区域 PNG；还支持 window/workspace/sessions/inspector/details/diagnostics，隐藏面板拒绝截图 |
+| POST `/ui/action` | `{"action":"workspace","value":"AISAC"}` 等视图操作 |
+| POST `/native/connect` | `{"host":"127.0.0.1","port":2002}` |
+| POST `/native/disconnect` | `{"session":"..."}` |
 
-事件与汇总参数：
+UI action 白名单为 `workspace`、`live`、`filter`、`select`、`session`、`range`、`theme`、`diagnostics`。值为字符串；workspace 使用 `Timeline`、`AISAC`、`Mixing`、`Location`、`Performance`；range 使用 `起点:终点` 秒数。未知 action 被拒绝。截图不接受任意输出路径，调用者自行保存响应。
 
-| 参数 | 默认值与规则 |
+事件/汇总查询参数：
+
+| 参数 | 规则 |
 | --- | --- |
-| `session` | 必填，必须唯一匹配已加载会话 |
-| `from` / `to` | 包含边界的时间范围，默认 0 至该会话最新时间 |
-| `kind` | 可选精确类型过滤 |
-| `watermark` | 最大事件序号，默认当前接收水位 |
-| `after` | 事件分页的排他起始序号，默认 0 |
-| `limit` | 事件页大小，默认 200，限制为 1–2,000 |
+| `session` | 必填，唯一匹配会话 |
+| `from` / `to` | 包含边界；默认 0 至最新时间 |
+| `kind` | 可选精确事件类型 |
+| `watermark` | 最大序号，默认当前水位 |
+| `after` | 分页排他起始序号，默认 0 |
+| `limit` | 默认 200，范围 1–2,000 |
 
-`/events` 返回 `events`、`hasMore`、`nextAfter` 及所用的会话、时间范围、水位和逐出数。翻页时固定首次的 `watermark`、`from`、`to`，将 `nextAfter` 作为下次 `after`。Live 数据仍可能在翻页期间逐出；需要稳定完整证据时先停止录制并打开历史。
+事件页返回 `events`、`hasMore`、`nextAfter`。分页固定首次 watermark/from/to，然后推进 after；Live 期间仍可能逐出旧记录。稳定完整查询应使用已停止的录制。汇总包含 `groups`、`earliest`、`evicted`、`dropped`、`coverage`。
 
-`/summary` 返回按类型计数的 `groups`、最早可用时间 `earliest`、`evicted`、`dropped` 和 `coverage`。若同时打开同一会话的多个历史副本，或同源 Live 与历史，当前查询会因来源不唯一返回 400；需重启接收器并仅打开所需来源。
+## MCP
 
-## MCP 代理
+`CriScope.exe --mcp` 运行逐行 JSON-RPC stdio 代理，协议 `2024-11-05`，调用已运行桌面的 HTTP 服务。
 
-执行 `CriScope.exe --mcp` 运行逐行 JSON-RPC 标准输入输出代理，协议版本为 `2024-11-05`。它调用已有接收器的 HTTP 服务，不启动第二个接收器。
-
-工具 `list_sessions` 无参数；`query_events`、`summarize_window` 使用上述查询参数，必须指定 `session`。代理只查询已有证据，不控制游戏、不读取任意路径文件。
+工具：`list_sessions`、`query_events`、`summarize_window`、`get_ui_state`、`capture_screenshot`、`control_ui`、`connect_native`、`disconnect_native`。截图返回 MCP image 内容。它不执行任意代码、不读取任意文件，也不控制游戏音频业务。

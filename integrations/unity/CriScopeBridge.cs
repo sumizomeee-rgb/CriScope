@@ -1,3 +1,4 @@
+#if UNITY_EDITOR || DEVELOPMENT_BUILD || CRISCOPE_DIAGNOSTICS
 // Optional Unity debug transport. No CRI or application-specific dependency.
 using System;
 using System.Collections.Generic;
@@ -14,6 +15,7 @@ namespace CriScope.Unity
     public sealed class WireEvent
     {
         public string kind, session, name, objectId, detail, platform;
+        public string source = "cri-sdk";
         public long seq;
         public double time, value, x, y, z;
         public int cue, pid;
@@ -25,13 +27,13 @@ namespace CriScope.Unity
         private sealed class Pending { public long Sequence, Dropped, FirstLost, LastLost; public string Json; }
         private readonly object gate = new object();
         private readonly Queue<Pending> pending = new Queue<Pending>();
-        private static readonly Stopwatch clock = Stopwatch.StartNew();
-        private static readonly string session = Guid.NewGuid().ToString("N");
+        private readonly Stopwatch clock = Stopwatch.StartNew();
+        private readonly string session = Guid.NewGuid().ToString("N");
         private readonly string host, hello;
         private readonly Thread worker;
         private volatile bool disposed;
         private volatile string status = "Connecting";
-        private static long sequence;
+        private long sequence;
         private const int Capacity = 8192;
         public string Status { get { return status; } }
 
@@ -152,3 +154,4 @@ namespace CriScope.Unity
         public void Dispose() { disposed = true; }
     }
 }
+#endif

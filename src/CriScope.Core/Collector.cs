@@ -4,7 +4,7 @@ using System.Net.Sockets;
 using System.Text;
 namespace CriScope.Core;
 
-public sealed class Collector : IDisposable
+public sealed partial class Collector : IDisposable
 {
     readonly ConcurrentDictionary<string,Session> sessions=new();
     readonly ConcurrentDictionary<string,TcpClient> active=new();
@@ -44,7 +44,7 @@ public sealed class Collector : IDisposable
             session=sessions.GetOrAdd(hello.session,_=>new Session(hello));
             if(session.Pid!=hello.pid || session.Platform!=hello.platform || session.Name!=hello.name) throw new InvalidDataException("重连实例元数据不一致");
             if(active.TryGetValue(session.Id,out var previous)) previous.Dispose();
-            active[session.Id]=client;session.Connected=true;session.Accept(hello);
+            active[session.Id]=client;session.SetCaptureState(true,true,"SDK 扩展已连接");session.Accept(hello);
             await writer.WriteLineAsync("{\"ack\":"+session.Watermark+"}");
             while(!stop.IsCancellationRequested)
             {
@@ -60,7 +60,7 @@ public sealed class Collector : IDisposable
         {if(!stop.IsCancellationRequested) Status="连接结束："+e.Message;}
         finally
         {
-            if(session!=null && active.TryGetValue(session.Id,out var current) && ReferenceEquals(current,client)) {session.Connected=false;active.TryRemove(session.Id,out _);}
+            if(session!=null && active.TryGetValue(session.Id,out var current) && ReferenceEquals(current,client)) {session.SetCaptureState(false,false,"SDK 扩展已断开");active.TryRemove(session.Id,out _);}
             client.Dispose();
         }
     }
@@ -92,5 +92,5 @@ public sealed class Collector : IDisposable
         sessions["replay:"+Guid.NewGuid()]=replay;
         return replay;
     }
-    public void Dispose() {stop.Cancel();listener?.Stop();foreach(var c in active.Values)c.Dispose();foreach(var s in sessions.Values)s.Dispose();}
+    public void Dispose() {stop.Cancel();DisposeNative();listener?.Stop();foreach(var c in active.Values)c.Dispose();foreach(var s in sessions.Values)s.Dispose();}
 }
