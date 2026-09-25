@@ -5,6 +5,8 @@ namespace CriScope.App;
 public sealed record PlaybackGroup(string Id, WireEvent? Request, WireEvent? End, WireEvent[][] Voices)
 {
     public string Name => Request?.name ?? Voices.SelectMany(v => v).FirstOrDefault()?.name ?? "关联未提供的 Voice";
+    public (WireEvent Begin, WireEvent? End)[] VoiceIntervals => Voices.Select(v =>
+        (v.FirstOrDefault(e => e.kind == "play") ?? v[0], v.LastOrDefault(e => e.kind == "stop"))).ToArray();
     public bool UnknownStart => Request == null || Request.detail.Contains("起点未知", StringComparison.Ordinal);
 }
 

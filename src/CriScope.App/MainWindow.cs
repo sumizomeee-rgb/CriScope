@@ -134,7 +134,7 @@ public sealed class MainWindow : Window
     {
         var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
         var path = text.Contains("导出") ? "M12,16 V3 M7,8 L12,3 L17,8 M4,14 V21 H20 V14" : text.Contains("开始记录") ? "M12,4 A8,8 0 1 0 12,20 A8,8 0 1 0 12,4" : (text.Contains("记录") || text.Contains("保存")) ? "M8,8 H16 V16 H8 Z" : text.Contains("打开") ? "M3,7 H10 L12,9 H21 L18,19 H3 Z M3,7 V5 H10 L12,7" :
-            (text.Contains("播放") || text.Contains("声音")) ? "M7,4 L20,12 L7,20 Z" : text.Contains("控制") ? "M5,3 V21 M12,3 V21 M19,3 V21 M2,8 H8 M9,16 H15 M16,6 H22" :
+            text.Contains("声音时间线") ? "M3,5 V19 M7,8 H21 M7,12 H17 M7,16 H21" : text.Contains("播放") ? "M7,4 L20,12 L7,20 Z" : text.Contains("控制") ? "M5,3 V21 M12,3 V21 M19,3 V21 M2,8 H8 M9,16 H15 M16,6 H22" :
             text.Contains("混音") ? "M4,9 V18 M9,4 V20 M14,7 V17 M19,2 V22" : text.Contains("空间") ? "M12,3 L21,8 V17 L12,22 L3,17 V8 Z M3,8 L12,13 L21,8 M12,13 V22" :
             text.Contains("资源") ? "M4,4 H20 V9 H4 Z M4,14 H20 V19 H4 Z" : text.Contains("连接") ? "M8,5 L4,9 V15 L8,19 M16,5 L20,9 V15 L16,19 M8,12 H16" :
             text.Contains("诊断") ? "M4,3 H20 V21 H4 Z M8,8 H16 M8,12 H16 M8,16 H13" : text.Contains("断开") ? "M5,5 L19,19 M19,5 L5,19" :
@@ -483,24 +483,37 @@ public sealed class MainWindow : Window
             {
                 _sessions.Children.Add(new TextBlock { Text = "等待游戏接入\n\n在游戏中填写运行 CriScope\n的电脑 IP，再开启采集。\n同机默认 127.0.0.1。\n\n同一游戏的原生与扩展\n通道会显示在同一张卡片。", TextWrapping = TextWrapping.Wrap, Foreground = _p.Muted, Margin = new Thickness(18), FontSize = 12, LineHeight = 23 });
             }
-            foreach (var group in ClientCardPresentation.Group(sessions.OrderBy(s => _sessionOrder[s])))
+            var clientGroups = ClientCardPresentation.Group(sessions.OrderBy(s => _sessionOrder[s]));
+            foreach (var group in clientGroups)
             {
                 var preferred = ClientCardPresentation.Default(group);
                 bool selected = _session != null && group.Contains(_session);
                 var card = new StackPanel { Spacing = 6, Margin = new Thickness(8,3) };
-                var lines = new StackPanel { Spacing = 5 };
-                lines.Children.Add(Label(preferred.Name,13,selected?_p.Selection:_p.Text));
-                lines.Children.Add(Label($"{preferred.Machine} · {preferred.Platform}",10));
-                lines.Children.Add(Label($"PID {preferred.Pid}"+(preferred.IsReplay?" · 日志回放":""),10));
+                var duplicateName = clientGroups.Count(other => string.Equals(ClientCardPresentation.Default(other).Name, preferred.Name, StringComparison.OrdinalIgnoreCase)) > 1;
+                var headingLine = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 6 };
+                var clientName = Label(string.IsNullOrWhiteSpace(preferred.Name) ? "未命名客户端" : preferred.Name, 13, selected ? _p.Selection : _p.Text);
+                clientName.TextTrimming = TextTrimming.CharacterEllipsis;
+                headingLine.Children.Add(clientName);
+                var cardStatus = ClientCardPresentation.Status(group);
+                var statusColor = cardStatus == "在线" || cardStatus == "记录中" ? _p.Good : cardStatus == "已断开" ? _p.Error : _p.Signal;
+                var status = Label("● " + cardStatus, 10, statusColor);
+                Grid.SetColumn(status, 1); headingLine.Children.Add(status);
+                var lines = new StackPanel { Spacing = 4 };
+                lines.Children.Add(headingLine);
+                if (duplicateName && !preferred.IsReplay) lines.Children.Add(Label($"进程 {preferred.Pid}", 10, _p.Muted));
                 var heading = Action("",()=>SelectSession(preferred)); heading.Content=lines;
                 heading.HorizontalAlignment=HorizontalAlignment.Stretch;heading.HorizontalContentAlignment=HorizontalAlignment.Left;
-                heading.BorderBrush=selected?_p.Selection:_p.Border;card.Children.Add(heading);
+                heading.BorderBrush=selected?_p.Selection:_p.Border;
+                ToolTip.SetTip(heading, $"{preferred.Name}\n{preferred.Machine} · {preferred.Platform}\nPID {preferred.Pid}\n{preferred.ConnectionStatus}\n{preferred.Source}");
+                card.Children.Add(heading);
                 foreach(var channel in group.GroupBy(ClientCardPresentation.Channel))
                 {
                     var current=channel.OrderByDescending(s=>s.Connected).ThenByDescending(s=>_sessionOrder[s]).First();
                     var name=channel.Key=="native"?"原生":"SDK 扩展";
                     var control=Action("",()=>SelectSession(current));
-                    control.Content=Label(name+" · "+(current.Recording?"记录中":current.Connected?"已接入":"已断开"),10,ReferenceEquals(current,_session)?_p.Selection:_p.Muted);
+                    var channelStatus = current.IsReplay ? "日志" : current.Recording ? "记录中" : current.Connected ? "在线" : "已断开";
+                    var channelColor = channelStatus == "在线" || channelStatus == "记录中" ? _p.Good : channelStatus == "已断开" ? _p.Error : _p.Signal;
+                    control.Content=Label($"{name}  ·  ● {channelStatus}",11,channelColor);
                     control.Padding=new Thickness(8,5);control.HorizontalAlignment=HorizontalAlignment.Stretch;
                     ToolTip.SetTip(control,current.ConnectionStatus+"\n"+current.Source);card.Children.Add(control);
                 }

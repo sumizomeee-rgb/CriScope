@@ -55,6 +55,10 @@ public sealed class SmokeApp : Application
                     }
                     var native=Meta(clientId,"native"); var sdk=Meta(clientId,"sdk"); var other=Meta(Guid.NewGuid().ToString("N"),"native");
                     Check(ClientCardPresentation.Group([native,sdk,other]).Length==2 && ClientCardPresentation.Default([sdk,native])==native, "客户端按 ClientId 归组，默认原生通道，不按相同 PID 合并");
+                    Check(ClientCardPresentation.Status([native,sdk])=="在线", "卡片明确标示在线");
+                    Connected(native,false); Connected(sdk,false);
+                    Check(ClientCardPresentation.Status([native,sdk])=="已断开", "卡片明确标示断线");
+                    Connected(native,true); Connected(sdk,true);
                     var spatial=new[]{new WireEvent {kind="position",entity="source",objectId="s1",time=1},new WireEvent {kind="position",entity="source",objectId="s2",time=1},new WireEvent {kind="position",entity="listener",objectId="l",time=1},new WireEvent {kind="position",entity="distance-listener",objectId="l",time=1}};
                     var discontinuous = spatial.Append(new WireEvent {kind="gap",time=3,seq=10}).ToArray();
                     Check(SpatialPresentation.Group(discontinuous,10).Length==0 && SpatialPresentation.Group(discontinuous,2).Length==2, "缺失后清除空间旧点，历史视野仍按历史边界显示");
@@ -69,6 +73,11 @@ public sealed class SmokeApp : Application
                     Check(MetricPresentation.Name(new WireEvent { objectId = "stream.used" }) == "流式播放声部（原生）" && MetricPresentation.Name(new WireEvent { name = "voices.streaming.used" }) == "Streaming 声池", "原生声部与 SDK 声池口径分开");
                     Check(MetricPresentation.StreamingPool(new WireEvent { value = 1 }, new WireEvent { value = 16 }) == "1 / 16" && MetricPresentation.StreamingPool(new WireEvent { value = 1 }, null) == "1 / 未提供", "Streaming 池用量容量及缺失容量");
                     await Task.Delay(400);
+                    var cards=typeof(MainWindow).GetField("_sessions",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(window) as StackPanel;
+                    Check(cards!.GetVisualDescendants().OfType<TextBlock>().Any(label=>label.Text?.Contains("● 已断开")==true), "断线状态在客户端卡片中可见");
+                    Check(!cards!.GetVisualDescendants().OfType<TextBlock>().Any(label=>label.Text?.Contains("UI TEST FIXTURE ·")==true), "机器名不占用卡片主视区");
+                    var timelineTab=window.GetVisualDescendants().OfType<Button>().Single(button=>ToolTip.GetTip(button)?.ToString()=="声音时间线");
+                    Check(!timelineTab.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().Single().Data!.ToString()!.Contains("L20,12"), "时间线页签不用播放三角");
                     Check(window.WindowDecorations==WindowDecorations.BorderOnly && window.CanResize && window.ShowInTaskbar, "自定义标题栏保留 resize 与任务栏");
                     var maximize=window.GetVisualDescendants().OfType<Button>().Single(button=>ToolTip.GetTip(button)?.ToString()=="最大化 / 还原");
                     Click(maximize); await Task.Delay(120); Check(window.WindowState==WindowState.Maximized,"自定义最大化按钮");
@@ -192,6 +201,21 @@ public sealed class SmokeApp : Application
                     Check(!listenerHit.rect.Intersects(sourceHit.rect) && listenerHit.rect.Height==46 && sourceHit.rect.Height==46, "同坐标监听点与音源堆叠标注及点击区不重叠");
                     Check(spatialTimeline.Events.All(e=>e.x==0&&e.z==3), "空间标注错位不改变真实坐标");
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/spatial-same-point.png"),spatialPng);
+                    var requestOnly=new WireEvent {kind="request",entity="cue",objectId="request-only",name="g_ui_default",time=1};
+                    var requestGroup=PlaybackPresentation.Group([requestOnly],120).Single();
+                    Check(requestGroup.VoiceIntervals.Length==0,"只有播放请求时不生成延续到当前的Voice区间");
+                    var voiceBegin=new WireEvent {kind="play",entity="voice",objectId="v",parentId="request-only",time=2};
+                    var voiceEnd=new WireEvent {kind="stop",entity="voice",objectId="v",parentId="request-only",time=2.483};
+                    var shortGroup=PlaybackPresentation.Group([requestOnly,voiceBegin,voiceEnd],120).Single();
+                    Check(shortGroup.VoiceIntervals.Single().End?.time==2.483 && shortGroup.End==null,"缺少Playback释放也按真实Voice释放结束声音条");
+                    var pendingSession=Meta(Guid.NewGuid().ToString("N"),"native","pending");sessions[pendingSession.Id]=pendingSession;
+                    pendingSession.Accept(new WireEvent {session=pendingSession.Id,seq=1,kind="request",entity="cue",objectId="pending",name="g_ui_default",time=1});
+                    pendingSession.Accept(new WireEvent {session=pendingSession.Id,seq=2,kind="metric",name="CPU",time=120,value=1});
+                    Select(pendingSession);window.ApplyUiAction("workspace","Timeline");window.ApplyUiAction("range","90:120");
+                    await Task.Delay(100);var requestPng=window.CapturePng("workspace");
+                    var pendingHits=(List<(Rect rect,WireEvent item)>)typeof(TimelineControl).GetField("_hits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(Field<TimelineControl>("_timeline"))!;
+                    Check(!pendingHits.Any(h=>h.item.kind=="request" && h.rect.X>=214),"真实绘制不把窗口前的孤立请求画成跨窗口长条");
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/request-only.png"),requestPng);
                     var carry = CreateSession(1003, "Long BGM"); sessions[carry.Id] = carry;
                     carry.Accept(new WireEvent { kind = "aisac", source = "cri-native", session = carry.Id, seq = 2, time = 2, name = "Distance", objectId = "player", entity = "player", value = .25 });
                     carry.Accept(new WireEvent { kind = "metric", source = "cri-native", session = carry.Id, seq = 3, time = 200, name = "CPU", value = 1 });

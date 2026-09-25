@@ -96,9 +96,9 @@ public sealed class TimelineControl : Control
     }
     private void DrawTracks(DrawingContext c)
     {
-        Text(c,"● Playback 实例",14,45,Palette.Selection);
-        Text(c,"展开查看实际 Voice",150,45,Palette.Voice);
-        Text(c,"? 起点未知   ○ 结束未观测",310,45);
+        Text(c,"● Voice 存续区间",14,45,Palette.Selection);
+        Text(c,"◇ 播放请求 · 展开查看 Voice",150,45,Palette.Voice);
+        Text(c,"? 起点未知   ○ 释放未观测",360,45);
         var groups=PlaybackPresentation.Group(Events,End);
         double y=75-_vertical; int row=0;
         using var clip=c.PushClip(new Rect(0,68,Bounds.Width,Math.Max(0,Bounds.Height-96)));
@@ -111,11 +111,24 @@ public sealed class TimelineControl : Control
             bool expanded=_expanded.Contains(key);
             if(row++%2==0)c.FillRectangle(Palette.Alternate,new Rect(0,y,Bounds.Width,36));
             RowName(c,(expanded?"− ":"+ ")+group.Name,y+3);
-            var startLabel=group.UnknownStart?"起点未知":$"{group.Voices.Length} Voice";
+            var startLabel=group.Voices.Length==0?"仅请求 · 未观测到 Voice":$"{group.Voices.Length} 个 Voice";
             Text(c,startLabel+" · "+(group.End==null?"结束未观测":"实例已结束"),27,y+21,size:9);
             _expandHits.Add((new Rect(0,y,24,36),key));
             _hits.Add((new Rect(24,y,LabelWidth-24,36),anchor));
-            DrawInterval(anchor,group.End,y,36,Palette.Selection,group.UnknownStart);
+            // A Cue request is a point observation, not evidence of continuous voice allocation.
+            if(group.Request is {} request && request.time>=Start && request.time<=End)
+            {
+                var px=X(request.time); var py=y+18;
+                var pen=new Pen(Palette.Request,1.5);
+                c.DrawLine(pen,new Point(px,py-6),new Point(px+5,py));
+                c.DrawLine(pen,new Point(px+5,py),new Point(px,py+6));
+                c.DrawLine(pen,new Point(px,py+6),new Point(px-5,py));
+                c.DrawLine(pen,new Point(px-5,py),new Point(px,py-6));
+                _hits.Add((new Rect(px-6,y,12,36),request));
+            }
+            foreach(var interval in group.VoiceIntervals)
+                DrawInterval(interval.Begin,interval.End,y,36,Palette.Selection,
+                    interval.Begin.kind!="play" || interval.Begin.detail.Contains("起点未知",StringComparison.Ordinal));
             y+=36;
             if(!expanded)continue;
             foreach(var voice in group.Voices)

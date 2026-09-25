@@ -34,8 +34,11 @@ internal sealed class WindowTitleBar : Border
         void ToggleMaximize() => owner.WindowState = owner.WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
         Button Caption(string text, string path, Action action, bool close = false)
         {
-            var button = new Button { Width = 46, Height = 35, Padding = new Thickness(14, 10), CornerRadius = new CornerRadius(0), Background = Brushes.Transparent, BorderThickness = new Thickness(0),
-                Content = new Avalonia.Controls.Shapes.Path { Data = Geometry.Parse(path), Stroke = palette.Text, StrokeThickness = 1.4, Width = 14, Height = 14, Stretch = Stretch.Uniform } };
+            var canvas = new Canvas { Width = 24, Height = 24 };
+            canvas.Children.Add(new Avalonia.Controls.Shapes.Path { Data = Geometry.Parse(path), Stroke = palette.Text, StrokeThickness = 1.4, Stretch = Stretch.None });
+            var button = new Button { Width = 46, Height = 35, Padding = new Thickness(0), HorizontalContentAlignment = HorizontalAlignment.Center,
+                VerticalContentAlignment = VerticalAlignment.Center, CornerRadius = new CornerRadius(0), Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+                Content = new Viewbox { Width = 16, Height = 16, Child = canvas } };
             ToolTip.SetTip(button, text); button.Click += (_, _) => action();
             button.PointerEntered += (_, _) => button.Background = close ? palette.Error : palette.Hover;
             button.PointerExited += (_, _) => button.Background = Brushes.Transparent;
