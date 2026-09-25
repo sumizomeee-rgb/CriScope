@@ -29,13 +29,21 @@ public sealed class TimelineControl : Control
     public void SetSelection(double? start, double? end) { SelectionStart=start; SelectionEnd=end; InvalidateVisual(); }
     private Point? _drag;
     private double _dragEnd, _vertical, _contentHeight;
-    private bool _panning, _space;
-    private int _busChannels;
+    private bool _panning, _space, _scrollDragging;
+    private double _scrollGrab;
+    private int _busCount, _busChannels;
     private readonly List<(Rect rect, WireEvent item)> _hits = [];
     private readonly List<(Rect rect, string key)> _expandHits = [];
     private readonly HashSet<string> _expanded = [];
     private const double LabelWidth = 214;
     private double PlotWidth => Math.Max(40, Bounds.Width-LabelWidth-22);
+    private double MixingViewportHeight => Math.Max(1,Bounds.Height-106);
+    private double MixingMaxScroll => Math.Max(0,_contentHeight+10-MixingViewportHeight);
+    private Rect MixingScrollTrack => new(Bounds.Width-18,76,18,MixingViewportHeight);
+    private Rect MixingScrollThumb
+    {
+        get { var track=MixingScrollTrack;var thumb=Math.Max(28,track.Height*track.Height/Math.Max(track.Height,_contentHeight+10));return new Rect(Bounds.Width-16,track.Y+(MixingMaxScroll<=0?0:_vertical/MixingMaxScroll)*(track.Height-thumb),14,thumb); }
+    }
     public double Start => End-Span;
     private double X(double time) => LabelWidth+(time-Start)/Span*PlotWidth;
     private static readonly Typeface Font = new("Segoe UI, Microsoft YaHei UI");
@@ -49,11 +57,14 @@ public sealed class TimelineControl : Control
                 var f=Math.Clamp((e.GetPosition(this).X-LabelWidth)/PlotWidth,0,1); var anchor=Start+f*Span;
                 Span=Math.Clamp(Span*(e.Delta.Y>0?.8:1.25),.25,86400); if(!Live)End=anchor+Span*(1-f);
             } else if(e.KeyModifiers.HasFlag(KeyModifiers.Shift)){End-=e.Delta.Y*Span*.1;Live=false;}
-            else _vertical=Math.Clamp(_vertical-e.Delta.Y*36,0,Math.Max(0,_contentHeight+100-Bounds.Height));
-            ViewChanged?.Invoke();InvalidateVisual();e.Handled=true;
+            else _vertical=Math.Clamp(_vertical-e.Delta.Y*36,0,Mode=="Mixing"?MixingMaxScroll:Math.Max(0,_contentHeight+100-Bounds.Height));
+            if(Mode!="Mixing"||e.KeyModifiers.HasFlag(KeyModifiers.Control)||e.KeyModifiers.HasFlag(KeyModifiers.Shift))ViewChanged?.Invoke();InvalidateVisual();e.Handled=true;
         };
         PointerPressed += (_,e) => {
-            Focus();var p=e.GetPosition(this);_panning=_space||e.GetCurrentPoint(this).Properties.IsMiddleButtonPressed;
+            Focus();var p=e.GetPosition(this);
+            if(Mode=="Mixing"&&MixingMaxScroll>0&&MixingScrollTrack.Contains(p)&&e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+            { var thumb=MixingScrollThumb;_scrollGrab=thumb.Contains(p)?p.Y-thumb.Y:thumb.Height/2;_scrollDragging=true;SetMixingScrollFromPointer(p.Y);e.Pointer.Capture(this);e.Handled=true;return; }
+            _panning=_space||e.GetCurrentPoint(this).Properties.IsMiddleButtonPressed;
             if(_panning||e.KeyModifiers.HasFlag(KeyModifiers.Shift)){_drag=p;_dragEnd=End;e.Pointer.Capture(this);return;}
             var expand=_expandHits.LastOrDefault(h=>h.rect.Contains(p));
             if(expand.key!=null){bool had=_expanded.Contains(expand.key);if(expand.key.StartsWith("spatial:",StringComparison.Ordinal)){foreach(var key in _expanded.Where(k=>k.StartsWith("spatial:",StringComparison.Ordinal)).ToArray())_expanded.Remove(key);_vertical=0;}if(had)_expanded.Remove(expand.key);else _expanded.Add(expand.key);InvalidateVisual();return;}
@@ -63,17 +74,20 @@ public sealed class TimelineControl : Control
         };
         PointerMoved += (_,e) => {
             var p=e.GetPosition(this);
+            if(_scrollDragging){SetMixingScrollFromPointer(p.Y);e.Handled=true;return;}
             if(_drag is not {} start){var hit=_hits.LastOrDefault(h=>h.rect.Contains(p));ToolTip.SetTip(this,hit.item==null?null:$"{hit.item.name}\n{TimeLabel(hit.item.time)} · {hit.item.kind}\n{hit.item.detail}");return;}
             var delta=p.X-start.X;if(Math.Abs(delta)<8)return;
             if(_panning){End=_dragEnd-delta/PlotWidth*Span;Live=false;}
             else{SelectionStart=Start+Math.Clamp((start.X-LabelWidth)/PlotWidth,0,1)*Span;SelectionEnd=Start+Math.Clamp((p.X-LabelWidth)/PlotWidth,0,1)*Span;}
             ViewChanged?.Invoke();InvalidateVisual();
         };
-        PointerReleased += (_,e)=>{_drag=null;e.Pointer.Capture(null);};
+        PointerReleased += (_,e)=>{_drag=null;_scrollDragging=false;e.Pointer.Capture(null);};
         KeyDown += (_,e)=>{if(e.Key==Key.Space){_space=true;e.Handled=true;}};
         KeyUp += (_,e)=>{if(e.Key==Key.Space){_space=false;e.Handled=true;}};
         LostFocus += (_,_)=>_space=false;
     }
+    private void SetMixingScrollFromPointer(double y)
+    { var track=MixingScrollTrack;var thumb=MixingScrollThumb;_vertical=Math.Clamp((y-_scrollGrab-track.Y)/Math.Max(1,track.Height-thumb.Height),0,1)*MixingMaxScroll;InvalidateVisual(); }
     private void Text(DrawingContext c,string text,double x,double y,IBrush? brush=null,double size=11)
         =>c.DrawText(new FormattedText(text,CultureInfo.InvariantCulture,FlowDirection.LeftToRight,Font,size,brush??Palette.Muted),new Point(x,y));
     private void RowName(DrawingContext c,string name,double y,IBrush? brush=null)
@@ -217,24 +231,54 @@ public sealed class TimelineControl : Control
     }
     private void DrawMixing(DrawingContext c)
     {
-        _busChannels=0;
-        Text(c,"混音 / BUS METER",22,20,Palette.Text,16);Text(c,"Peak ┃  RMS ▰  · 分声道 · 线性幅值换算 dBFS",22,50,Palette.Voice);
-        var buses=Events.Where(e=>e.kind=="bus"&&e.time<=End).GroupBy(e=>e.objectId).Select(g=>g.OrderBy(e=>e.time).Last()).ToArray();if(buses.Length==0){Empty(c,"Bus 电平尚未提供","未观察到的路由与效果参数不会补造。请确认来源已启用相应监控。");return;}
-        double y=86-_vertical;using var clip=c.PushClip(new Rect(0,75,Bounds.Width,Math.Max(0,Bounds.Height-100)));
-        foreach(var e in buses){RowName(c,e.name,y+3,Palette.Voice);var channels=new List<(string name,double peak,double rms)>();try{using var doc=JsonDocument.Parse(e.raw);if(doc.RootElement.TryGetProperty("channels",out var array))foreach(var ch in array.EnumerateArray())channels.Add(("CH "+ch.GetProperty("channel"),ch.GetProperty("peak").GetDouble(),ch.GetProperty("rms").GetDouble()));}catch(JsonException){}catch(InvalidOperationException){}catch(KeyNotFoundException){}
-            _busChannels+=channels.Count;if(channels.Count==0){Text(c,"分声道数据未提供",LabelWidth,y+6);y+=44;continue;}foreach(var ch in channels){double Db(double v)=>v>0?Math.Clamp(20*Math.Log10(v),-96,6):-96;var rms=Db(ch.rms);var peak=Db(ch.peak);Text(c,ch.name,12,y+25,size:10);c.FillRectangle(Palette.Alternate,new Rect(LabelWidth,y+12,PlotWidth,10));c.FillRectangle(Palette.Voice,new Rect(LabelWidth,y+12,Math.Clamp((rms+96)/102,0,1)*PlotWidth,10));var px=LabelWidth+Math.Clamp((peak+96)/102,0,1)*PlotWidth;c.DrawLine(new Pen(peak>=0?Palette.Error:Palette.Request,2),new Point(px,y+7),new Point(px,y+27));Text(c,$"Peak {(ch.peak==0?"−∞":peak.ToString("0.0"))} · RMS {(ch.rms==0?"−∞":rms.ToString("0.0"))} dBFS",LabelWidth,y+27,size:10);_hits.Add((new Rect(0,y,Bounds.Width,45),e));y+=48;}y+=14;
-        }_contentHeight=y+_vertical-86;
+        var buses=MixingPresentation.Latest(Events,End);
+        _busCount=buses.Length;_busChannels=buses.Sum(b=>b.Channels.Length);
+        Text(c,"混音 / BUS METER",22,20,Palette.Text,16);
+        Text(c,"每 Bus 一行 · Peak / RMS：分别取返回槽位最大值（概览，非混合信号）",22,50,Palette.Voice,11);
+        if(buses.Length==0){_contentHeight=0;_vertical=0;Empty(c,"Bus 电平尚未提供","未观察到的路由与效果参数不会补造。请确认来源已启用相应监控。");return;}
+        double contentHeight=buses.Sum(b=>42+(_expanded.Contains("bus:"+b.Event.objectId)?b.Channels.Length*40:0));
+        _contentHeight=contentHeight;_vertical=Math.Clamp(_vertical,0,MixingMaxScroll);
+        double y=86-_vertical;
+        using var clip=c.PushClip(new Rect(0,75,Math.Max(0,Bounds.Width-18),MixingViewportHeight));
+        foreach(var bus in buses)
+        {
+            var e=bus.Event;var key="bus:"+e.objectId;var expanded=_expanded.Contains(key);
+            c.FillRectangle(Palette.Alternate,new Rect(0,y,Bounds.Width-18,40));
+            RowName(c,(expanded?"− ":"+ ")+e.name,y+3,Palette.Voice);
+            Text(c,$"{bus.Channels.Length} 个返回槽位 · {TimeLabel(e.time)}",12,y+21,size:9);
+            if(bus.Channels.Length==0)Text(c,"分声道数据未提供",LabelWidth+8,y+10);
+            else DrawMeter(bus.MaxPeak,bus.MaxRms,y+2);
+            if(y+40>75&&y<Bounds.Height-30)
+            { _expandHits.Add((new Rect(0,y,LabelWidth,40),key));_hits.Add((new Rect(LabelWidth,y,Math.Max(0,Bounds.Width-LabelWidth-18),40),e)); }
+            y+=42;
+            if(!expanded)continue;
+            foreach(var ch in bus.Channels)
+            {
+                Text(c,"↳ "+ch.Label,30,y+5,Palette.Muted,11);
+                DrawMeter(ch.Peak,ch.Rms,y);
+                if(y+38>75&&y<Bounds.Height-30)_hits.Add((new Rect(0,y,Math.Max(0,Bounds.Width-18),38),e));
+                y+=40;
+            }
+        }
+
+        void DrawMeter(double peakValue,double rmsValue,double top)
+        {
+            static double Db(double value)=>value>0?Math.Clamp(20*Math.Log10(value),-96,6):-96;
+            var peak=Db(peakValue);var rms=Db(rmsValue);var width=Math.Max(40,PlotWidth-210);
+            c.FillRectangle(Palette.Panel,new Rect(LabelWidth+8,top+8,width,9));
+            c.FillRectangle(Palette.Voice,new Rect(LabelWidth+8,top+8,Math.Clamp((rms+96)/102,0,1)*width,9));
+            var px=LabelWidth+8+Math.Clamp((peak+96)/102,0,1)*width;
+            c.DrawLine(new Pen(peak>=0?Palette.Error:Palette.Request,2),new Point(px,top+4),new Point(px,top+21));
+            Text(c,$"P {(peakValue<=0?"−∞":peak.ToString("0.0"))} · R {(rmsValue<=0?"−∞":rms.ToString("0.0"))} dBFS",LabelWidth+width+18,top+6,size:10);
+        }
     }
     private void DrawScrollHint(DrawingContext c)
     {
         c.FillRectangle(Palette.Panel,new Rect(0,Bounds.Height-30,Bounds.Width,30));
-        Text(c,$"↕ 滚轮上下浏览全部声道 · 当前来源共 {_busChannels} 声道",18,Bounds.Height-23,Palette.Text,12);
-        var view=Math.Max(1,Bounds.Height-106);
-        if(_contentHeight<=view)return;
-        var thumb=Math.Max(28,view*view/_contentHeight);
-        var top=76+Math.Clamp(_vertical/Math.Max(1,_contentHeight-view),0,1)*(view-thumb);
-        c.FillRectangle(Palette.Border,new Rect(Bounds.Width-7,76,3,view));
-        c.FillRectangle(Palette.Muted,new Rect(Bounds.Width-8,top,5,thumb));
+        Text(c,$"↕ 滚轮 / 拖动右侧滚动条 · 已观测 {_busCount} 个 Bus / {_busChannels} 个返回通道槽位",18,Bounds.Height-23,Palette.Text,12);
+        if(MixingMaxScroll<=0)return;
+        c.FillRectangle(Palette.Border,MixingScrollTrack);
+        c.FillRectangle(Palette.Muted,MixingScrollThumb);
     }
     private static readonly Geometry EarIcon=Geometry.Parse("M17,18 C17,22 14,25 10,23 C7,21 11,18 8,15 C4,11 6,3 12,2 C21,0 25,10 19,15 M11,14 C8,10 11,6 15,7 C19,8 17,12 14,13 L13,18");
     private static readonly Geometry SpeakerIcon=Geometry.Parse("M3,9 H8 L14,4 V22 L8,17 H3 Z M18,8 Q24,13 18,18 M21,4 Q31,13 21,22");

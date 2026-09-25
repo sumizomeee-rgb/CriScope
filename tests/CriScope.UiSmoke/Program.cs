@@ -103,6 +103,31 @@ public sealed class SmokeApp : Application
                         Check(State().GetProperty("live").GetBoolean() && State().GetProperty("selected").GetInt64() == 1 && Field<TextBox>("_filter").Text == "Alpha"
                             && State().GetProperty("end").GetDouble() == end, "工作区 " + workspace + " 保留实时/选择/筛选/范围");
                     }
+                    var meterChannels=Enumerable.Range(0,16).Select(ch=>new {channel=ch,peak=ch==3?.8:0d,rms=ch==5?.4:0d}).ToArray();
+                    var meterRaw=JsonSerializer.Serialize(new {channels=meterChannels});
+                    var mixingSession=Meta(Guid.NewGuid().ToString("N"),"native","mixing");sessions[mixingSession.Id]=mixingSession;
+                    for(var bus=0;bus<15;bus++)mixingSession.Accept(new WireEvent {session=mixingSession.Id,seq=bus+1,kind="bus",source="cri-native",entity="bus",objectId="bus"+bus,name="Bus "+bus,time=2.5,raw=meterRaw});
+                    var meterBuses=MixingPresentation.Latest(mixingSession.Snapshot(),3);
+                    Check(meterBuses.Length==15&&meterBuses.Sum(bus=>bus.Channels.Length)==240&&meterBuses.All(bus=>bus.MaxPeak==.8&&bus.MaxRms==.4),
+                        "15 个 Bus 与 240 个原生返回槽位分开计数，概览分别取槽位最大 Peak/RMS");
+                    window.ApplyUiAction("filter","");
+                    Select(mixingSession);
+                    window.ApplyUiAction("workspace","混音");await Task.Delay(150);
+                    var mixingTimeline=Field<TimelineControl>("_timeline");
+                    var busExpandHits=(List<(Rect rect,string key)>)typeof(TimelineControl).GetField("_expandHits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(mixingTimeline)!;
+                    Check((double)typeof(TimelineControl).GetField("_contentHeight",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(mixingTimeline)! == 15*42
+                        && busExpandHits.Count(h=>h.key.StartsWith("bus:"))<=15,"默认每个 Bus 只显示一条可展开汇总行");
+                    var busExpanded=(HashSet<string>)typeof(TimelineControl).GetField("_expanded",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(mixingTimeline)!;
+                    busExpanded.Add("bus:bus0");mixingTimeline.InvalidateVisual();await Task.Delay(100);
+                    Check((double)typeof(TimelineControl).GetField("_contentHeight",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(mixingTimeline)! == 15*42+16*40,
+                        "展开单个 Bus 后显示原生返回的 16 个槽位");
+                    var selectedBefore=mixingTimeline.Selected;var endBefore=State().GetProperty("end").GetDouble();
+                    typeof(TimelineControl).GetMethod("SetMixingScrollFromPointer",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(mixingTimeline,[mixingTimeline.Bounds.Height]);
+                    Check((double)typeof(TimelineControl).GetField("_vertical",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(mixingTimeline)!>0
+                        && State().GetProperty("live").GetBoolean()&&ReferenceEquals(mixingTimeline.Selected,selectedBefore)&&State().GetProperty("end").GetDouble()==endBefore,
+                        "滚动条位置可拖到底，且不改变 Live、时间范围与选中事件");
+                    Select(a);
+                    window.ApplyUiAction("filter","Alpha");
                     var theme = window.RequestedThemeVariant;
                     window.ApplyUiAction("theme", "toggle");
                     Check(window.RequestedThemeVariant != theme && State().GetProperty("selected").GetInt64() == 1 && State().GetProperty("live").GetBoolean(),
