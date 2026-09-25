@@ -1,0 +1,15 @@
+.local/
+**/bin/
+**/obj/
+.vs/
+.idea/
+*.user
+*.suo
+artifacts/
+*.criscope
+startup.log
+# 本机研究材料含项目内部路径，不进入公开仓库。
+docs/SPEC.md
+docs/VISUAL_INTERACTION_SPEC.md
+docs/ENVIRONMENT.md
+docs/LOCAL_DELIVERY.md
