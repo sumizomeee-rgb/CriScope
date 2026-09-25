@@ -56,7 +56,7 @@ public sealed class TimelineControl : Control
             Focus();var p=e.GetPosition(this);_panning=_space||e.GetCurrentPoint(this).Properties.IsMiddleButtonPressed;
             if(_panning||e.KeyModifiers.HasFlag(KeyModifiers.Shift)){_drag=p;_dragEnd=End;e.Pointer.Capture(this);return;}
             var expand=_expandHits.LastOrDefault(h=>h.rect.Contains(p));
-            if(expand.key!=null){if(!_expanded.Add(expand.key))_expanded.Remove(expand.key);InvalidateVisual();return;}
+            if(expand.key!=null){bool had=_expanded.Contains(expand.key);if(expand.key.StartsWith("spatial:",StringComparison.Ordinal)){foreach(var key in _expanded.Where(k=>k.StartsWith("spatial:",StringComparison.Ordinal)).ToArray())_expanded.Remove(key);_vertical=0;}if(had)_expanded.Remove(expand.key);else _expanded.Add(expand.key);InvalidateVisual();return;}
             var hit=_hits.LastOrDefault(h=>h.rect.Contains(p));
             if(hit.item!=null){Selected=hit.item;EventSelected?.Invoke(hit.item);}else{Selected=null;SetSelection(null,null);SelectionCleared?.Invoke();}
             InvalidateVisual();
@@ -86,7 +86,7 @@ public sealed class TimelineControl : Control
         if(Events.Length==0&&SupplementMetrics.Length==0){Empty(c,"等待音频观测","连接 CRI Monitor，或打开录制。尚未收到的数据不会显示为 0。");return;}
         if(Mode=="Location"){DrawLocations(c);return;}if(Mode=="Mixing"){DrawMixing(c);DrawScrollHint(c);return;}
         double step=Math.Pow(10,Math.Floor(Math.Log10(Span/8)));if(Span/step>16)step*=5;else if(Span/step>10)step*=2;
-        for(double t=Math.Ceiling(Start/step)*step;t<=End;t+=step){var x=X(t);c.DrawLine(new Pen(Palette.Border,.5),new Point(x,31),new Point(x,Bounds.Height-28));Text(c,TimeLabel(t),x+4,10,size:10);}
+        for(double t=Math.Max(0,Math.Ceiling(Start/step)*step);t<=End;t+=step){var x=X(t);c.DrawLine(new Pen(Palette.Border,.5),new Point(x,31),new Point(x,Bounds.Height-28));Text(c,TimeLabel(t),x+4,10,size:10);}
         Text(c,"会话相对时间",12,10,size:10);c.DrawLine(new Pen(Palette.Border),new Point(0,34),new Point(Bounds.Width,34));
         if(Mode=="AISAC")DrawControls(c);else if(Mode=="Performance")DrawResources(c);else DrawTracks(c);
         if(SelectionStart is {} a&&SelectionEnd is {} b&&Math.Abs(a-b)>.000001){var l=Math.Clamp(X(Math.Min(a,b)),LabelWidth,LabelWidth+PlotWidth);var r=Math.Clamp(X(Math.Max(a,b)),LabelWidth,LabelWidth+PlotWidth);c.DrawRectangle(null,new Pen(Palette.Selection,1.5),new Rect(l,35,Math.Max(0,r-l),Math.Max(0,Bounds.Height-64)));}
@@ -96,23 +96,66 @@ public sealed class TimelineControl : Control
     }
     private void DrawTracks(DrawingContext c)
     {
-        Text(c,"● 实际 Voice",14,45,Palette.Voice);Text(c,"◆ Cue 请求",124,45,Palette.Request);Text(c,"○ 结束未观测",230,45);
-        var groups=Events.Where(e=>e.kind is "play" or "stop"&&e.time<=End&&!string.IsNullOrEmpty(e.objectId)).GroupBy(e=>e.objectId);
-        double y=75-_vertical;int row=0;using var clip=c.PushClip(new Rect(0,68,Bounds.Width,Math.Max(0,Bounds.Height-96)));
-        foreach(var group in groups){var life=group.OrderBy(e=>e.time).ToArray();if(life[^1].kind=="stop"&&life[^1].time<Start)continue;
-            if(row++%2==0)c.FillRectangle(Palette.Alternate,new Rect(0,y,Bounds.Width,36));var first=life.FirstOrDefault(e=>e.kind=="play")??life[0];
-            RowName(c,string.IsNullOrEmpty(first.name)?"Voice "+first.objectId:first.name,y+3);Text(c,first.kind=="play"?"Voice · 已确认分配":"Voice · 起点未观测",12,y+21,size:9);_hits.Add((new Rect(0,y,LabelWidth,36),first));
-            WireEvent? opened=null;
-            foreach(var e in life){if(e.kind=="play"){if(opened!=null)Bar(opened,e.time,false);opened=e;}else if(opened!=null){Bar(opened,e.time,true);if(e.time>=Start)_hits.Add((new Rect(X(e.time)-5,y,10,36),e));opened=null;}else if(e.time>=Start){var x=X(e.time);c.DrawLine(new Pen(Palette.Error,2),new Point(x,y+7),new Point(x,y+29));_hits.Add((new Rect(x-5,y,12,36),e));}}
-            if(opened!=null)Bar(opened,End,false);
-            void Bar(WireEvent start,double end,bool stopped){var gap=Discontinuities.Where(d=>d.time>start.time&&d.time<end).OrderBy(d=>d.time).FirstOrDefault();if(gap!=null){end=gap.time;stopped=false;}var l=Math.Max(LabelWidth,X(start.time));var r=Math.Min(LabelWidth+PlotWidth,X(end));if(r<l)return;c.FillRectangle(Palette.Voice,new Rect(l,y+13,Math.Max(2,r-l),10));if(start.time>=Start)c.DrawLine(new Pen(Palette.Voice,2),new Point(l,y+8),new Point(l,y+28));if(stopped)c.DrawLine(new Pen(Palette.Error,2),new Point(r,y+8),new Point(r,y+28));else c.DrawEllipse(Palette.Canvas,new Pen(Palette.Voice,1.4),new Point(r,y+18),4,4);_hits.Add((new Rect(l,y,Math.Max(8,r-l),36),start));}y+=36;
+        Text(c,"● Playback 实例",14,45,Palette.Selection);
+        Text(c,"展开查看实际 Voice",150,45,Palette.Voice);
+        Text(c,"? 起点未知   ○ 结束未观测",310,45);
+        var groups=PlaybackPresentation.Group(Events,End);
+        double y=75-_vertical; int row=0;
+        using var clip=c.PushClip(new Rect(0,68,Bounds.Width,Math.Max(0,Bounds.Height-96)));
+        foreach(var group in groups)
+        {
+            if(group.End is {} ended && ended.time<Start)continue;
+            var anchor=group.Request??group.Voices.SelectMany(v=>v).FirstOrDefault();
+            if(anchor==null)continue;
+            var key="playback:"+group.Id;
+            bool expanded=_expanded.Contains(key);
+            if(row++%2==0)c.FillRectangle(Palette.Alternate,new Rect(0,y,Bounds.Width,36));
+            RowName(c,(expanded?"− ":"+ ")+group.Name,y+3);
+            var startLabel=group.UnknownStart?"起点未知":$"{group.Voices.Length} Voice";
+            Text(c,startLabel+" · "+(group.End==null?"结束未观测":"实例已结束"),27,y+21,size:9);
+            _expandHits.Add((new Rect(0,y,24,36),key));
+            _hits.Add((new Rect(24,y,LabelWidth-24,36),anchor));
+            DrawInterval(anchor,group.End,y,36,Palette.Selection,group.UnknownStart);
+            y+=36;
+            if(!expanded)continue;
+            foreach(var voice in group.Voices)
+            {
+                var begin=voice.FirstOrDefault(e=>e.kind=="play")??voice[0];
+                var stop=voice.LastOrDefault(e=>e.kind=="stop");
+                if(stop!=null&&stop.time<Start)continue;
+                if(row++%2==0)c.FillRectangle(Palette.Alternate,new Rect(0,y,Bounds.Width,30));
+                bool unknown=begin.kind!="play"||begin.detail.Contains("起点未知",StringComparison.Ordinal);
+                Text(c,"↳ Voice "+(Array.IndexOf(group.Voices,voice)+1),28,y+3,Palette.Voice,11);
+                Text(c,unknown?"开始未观测":stop==null?"结束未观测":"已释放",28,y+18,size:9);
+                DrawInterval(begin,stop,y,30,Palette.Voice,unknown);
+                _hits.Add((new Rect(24,y,LabelWidth-24,30),begin)); y+=30;
+            }
+            if(group.Voices.Length==0){Text(c,"此实例尚未关联到 Voice",28,y+6,size:10);y+=30;}
         }
-        foreach(var group in Events.Where(e=>e.kind=="request"&&e.time>=Start&&e.time<=End).GroupBy(e=>e.name)){RowName(c,string.IsNullOrEmpty(group.Key)?"Cue 请求":group.Key,y+7,Palette.Request);foreach(var e in group){var x=X(e.time);c.DrawEllipse(Palette.Request,null,new Point(x,y+17),4,4);_hits.Add((new Rect(x-7,y,14,34),e));}y+=34;}
-        _contentHeight=y+_vertical-75;if(row==0&&!Events.Any(e=>e.kind=="request"))Empty(c,"尚未观测到 Voice 生命周期","热接入不补造此前的开始。控制和资源数据可在相应工作区查看。");
+        _contentHeight=y+_vertical-75;
+        if(row==0)Empty(c,"尚未观测到播放实例","每个 Playback 单独一行。展开查看 Voice；Voice 数量不代表 Cue 层级或左右声道。");
+
+        void DrawInterval(WireEvent begin,WireEvent? stop,double top,double height,IBrush brush,bool unknown)
+        {
+            var end=stop?.time??End;
+            var gap=Discontinuities.Where(d=>d.time>begin.time&&d.time<end).OrderBy(d=>d.time).FirstOrDefault();
+            if(gap!=null){end=gap.time;stop=null;}
+            var left=Math.Max(LabelWidth,X(begin.time));var right=Math.Min(LabelWidth+PlotWidth,X(end));
+            if(right<left)return;
+            var center=top+height/2;
+            c.FillRectangle(brush,new Rect(left,center-4,Math.Max(2,right-left),8));
+            if(unknown){Text(c,"?",left+3,top+1,Palette.Request,13);c.DrawLine(new Pen(Palette.Canvas,2),new Point(left+4,center-5),new Point(left+9,center+5));}
+            else if(begin.time>=Start)c.DrawLine(new Pen(brush,2),new Point(left,center-9),new Point(left,center+9));
+            if(stop!=null)c.DrawLine(new Pen(Palette.Error,2),new Point(right,center-9),new Point(right,center+9));
+            else c.DrawEllipse(Palette.Canvas,new Pen(brush,1.5),new Point(right,center),4,4);
+            _hits.Add((new Rect(left,top,Math.Max(8,right-left),height),begin));
+            if(stop!=null)_hits.Add((new Rect(right-5,top,10,height),stop));
+        }
     }
+
     private void DrawControls(DrawingContext c)
     {
-        Text(c,"● AISAC 最后写入",14,45,Palette.Selection);Text(c,"● Selector / Block",160,45,Palette.Request);Text(c,"● Beat / Sequence",310,45,Palette.Good);
+        Text(c,"● AISAC 控制值",14,45,Palette.Selection);Text(c,"● Selector / Block",160,45,Palette.Request);Text(c,"● Beat / Sequence",310,45,Palette.Good);
         var groups=Events.Where(e=>e.time<=End&&e.kind is "aisac" or "selector" or "block" or "beat" or "sequence").GroupBy(e=>(e.kind,e.name,e.objectId)).ToArray();
         if(groups.Length==0){Empty(c,"控制状态尚未观测","连接前的值不保证可恢复；SDK 扩展可补充节拍与 Block 观察。");return;}
         double y=73-_vertical;int i=0;using var clip=c.PushClip(new Rect(0,68,Bounds.Width,Math.Max(0,Bounds.Height-96)));
@@ -120,7 +163,7 @@ public sealed class TimelineControl : Control
             if(i++%2==0)c.FillRectangle(Palette.Alternate,new Rect(0,y,Bounds.Width,h));RowName(c,(expanded?"− ":"+ ")+last.name,y+3,brush);
             var display=last.kind=="aisac"?last.value.ToString("0.####",CultureInfo.InvariantCulture):last.detail;Text(c,$"{display[..Math.Min(display.Length,23)]} · {TimeLabel(last.time)}",12,y+21,size:9);_expandHits.Add((new Rect(0,y,LabelWidth,h),key));
             var samples=all.Where(e=>e.time>=Start).ToArray();if(expanded&&last.kind=="aisac")DrawSeries(c,all,y+8,h-22,brush,true);else foreach(var e in samples){var x=X(e.time);c.DrawEllipse(brush,null,new Point(x,y+18),3,3);_hits.Add((new Rect(x-5,y,10,h),e));}
-            if(samples.Length==0)Text(c,"最后已知写入 · 本时间窗无新事件",LabelWidth+12,y+10,size:10);y+=h;
+            if(samples.Length==0)Text(c,PlaybackPresentation.LatestLabel(last.kind)+" · 更新于 "+TimeLabel(last.time),LabelWidth+12,y+10,size:10);y+=h;
         }_contentHeight=y+_vertical-73;
     }
     private void DrawSeries(DrawingContext c,WireEvent[] all,double y,double height,IBrush brush,bool stepped)
@@ -180,13 +223,74 @@ public sealed class TimelineControl : Control
         c.FillRectangle(Palette.Border,new Rect(Bounds.Width-7,76,3,view));
         c.FillRectangle(Palette.Muted,new Rect(Bounds.Width-8,top,5,thumb));
     }
+    private static readonly Geometry EarIcon=Geometry.Parse("M17,18 C17,22 14,25 10,23 C7,21 11,18 8,15 C4,11 6,3 12,2 C21,0 25,10 19,15 M11,14 C8,10 11,6 15,7 C19,8 17,12 14,13 L13,18");
+    private static readonly Geometry SpeakerIcon=Geometry.Parse("M3,9 H8 L14,4 V22 L8,17 H3 Z M18,8 Q24,13 18,18 M21,4 Q31,13 21,22");
     private void DrawLocations(DrawingContext c)
     {
-        Text(c,"空间 / XZ 俯视",22,20,Palette.Text,16);Text(c,"● Source   ◇ Listener   · 世界坐标 / 最后观测",22,50,Palette.Listener);
-        var positions=Events.Where(e=>e.kind=="position"&&e.time<=End&&double.IsFinite(e.x)&&double.IsFinite(e.z)).GroupBy(e=>e.entity+e.objectId).Select(g=>g.OrderBy(e=>e.time).Last()).ToArray();if(positions.Length==0){Empty(c,"空间位置尚未观测","Source、Listener 和方向分别来自观测；缺失位置不会被设为原点。");return;}
-        bool Listener(WireEvent e)=>e.entity=="listener";bool hasListener=positions.Any(Listener);Text(c,hasListener?"Listener 位置已观测 · 方向缺失时不绘制朝向":"Listener 位置未提供 · 当前显示 Source 世界坐标",22,76,hasListener?Palette.Muted:Palette.Request);
-        double cx=(positions.Min(e=>e.x)+positions.Max(e=>e.x))/2,cz=(positions.Min(e=>e.z)+positions.Max(e=>e.z))/2;var extent=Math.Max(2,positions.Max(e=>Math.Max(Math.Abs(e.x-cx),Math.Abs(e.z-cz))))*1.25;var center=new Point(Bounds.Width/2,(Bounds.Height+100)/2);var scale=Math.Max(1,Math.Min(Bounds.Width-140,Bounds.Height-180))/(2*extent);
-        for(int i=-2;i<=2;i++){var x=center.X+i*extent*scale/2;var z=center.Y+i*extent*scale/2;c.DrawLine(new Pen(Palette.Border,.7),new Point(x,110),new Point(x,Bounds.Height-30));c.DrawLine(new Pen(Palette.Border,.7),new Point(40,z),new Point(Bounds.Width-30,z));}
-        foreach(var cluster in positions.GroupBy(e=>(Math.Round(e.x,3),Math.Round(e.z,3)))){var e=cluster.FirstOrDefault(Listener)??cluster.First();var p=new Point(center.X+(e.x-cx)*scale,center.Y-(e.z-cz)*scale);var brush=Listener(e)?Palette.Listener:Palette.Voice;c.DrawEllipse(Palette.Canvas,new Pen(brush,2),p,Listener(e)?8:5,Listener(e)?8:5);Text(c,cluster.Count()>1?$"{cluster.Count()} 个对象 · 点击检查":e.name,p.X+12,p.Y-10,brush);Text(c,$"X {e.x:0.##} · Y {e.y:0.##} · Z {e.z:0.##}",p.X+12,p.Y+8,size:10);_hits.Add((new Rect(p.X-10,p.Y-12,140,40),e));}
+        Text(c,"空间 / XZ 俯视",22,20,Palette.Text,16);
+        DrawSpatialIcon(c,new Point(26,58),true);Text(c,"监听点",44,51,Palette.Listener);
+        DrawSpatialIcon(c,new Point(128,58),false);Text(c,"音源 · 同位置对象可展开",147,51,Palette.Voice);
+        bool showBase=_expanded.Contains("base-listeners");
+        Text(c,(showBase?"☑ ":"☐ ")+"显示基础监听器",Bounds.Width-190,52,Palette.Muted,11);
+        _expandHits.Add((new Rect(Bounds.Width-196,44,180,26),"base-listeners"));
+        var clusters=SpatialPresentation.Group(Events,End,showBase);
+        var positions=clusters.SelectMany(g=>g.Items).ToArray();
+        if(positions.Length==0){Empty(c,"空间位置尚未观测","监听器和音源分别来自观测；缺失位置不会被设为原点。");return;}
+        bool hasListener=clusters.Any(g=>g.Entity=="distance-listener");
+        Text(c,hasListener?"衰减监听点位置已收到":"衰减监听点尚未收到完整参数 · 当前只显示已知位置",22,81,hasListener?Palette.Muted:Palette.Request);
+        double cx=(positions.Min(e=>e.x)+positions.Max(e=>e.x))/2,cz=(positions.Min(e=>e.z)+positions.Max(e=>e.z))/2;
+        var extent=Math.Max(2,positions.Max(e=>Math.Max(Math.Abs(e.x-cx),Math.Abs(e.z-cz))))*1.25;
+        var center=new Point(Bounds.Width/2,(Bounds.Height+100)/2);
+        var scale=Math.Max(1,Math.Min(Bounds.Width-200,Bounds.Height-190))/(2*extent);
+        for(int i=-2;i<=2;i++){var x=center.X+i*extent*scale/2;var z=center.Y+i*extent*scale/2;c.DrawLine(new Pen(Palette.Border,.7),new Point(x,115),new Point(x,Bounds.Height-30));c.DrawLine(new Pen(Palette.Border,.7),new Point(40,z),new Point(Bounds.Width-30,z));}
+        foreach(var cluster in clusters)
+        {
+            var e=cluster.Items[0];bool listener=cluster.Entity!="source";
+            var peers=clusters.Where(other=>Math.Abs(other.Items[0].x-e.x)<.001&&Math.Abs(other.Items[0].z-e.z)<.001)
+                .OrderBy(other=>other.Entity=="distance-listener"?0:other.Entity=="listener"?1:2).ToArray();
+            var anchor=new Point(center.X+(e.x-cx)*scale,center.Y-(e.z-cz)*scale);
+            // Marker remains at the measured coordinate; only the annotation is displaced.
+            double labelWidth=Math.Min(270,Bounds.Width-52),stackHeight=peers.Length*54;
+            double left=Math.Clamp(anchor.X+22,26,Math.Max(26,Bounds.Width-labelWidth-16));
+            double top=Math.Clamp(anchor.Y-stackHeight/2,112,Math.Max(112,Bounds.Height-stackHeight-32))+Array.IndexOf(peers,cluster)*54;
+            var label=new Rect(left,top,labelWidth,46);
+            var p=new Point(left+16,top+23);
+            var brush=listener?Palette.Listener:Palette.Voice;
+            c.DrawLine(new Pen(brush,.8),anchor,new Point(left,top+23));
+            c.DrawEllipse(Palette.Canvas,new Pen(brush,1.2),anchor,3,3);
+            c.FillRectangle(Palette.Panel,label);
+            DrawSpatialIcon(c,p,listener);
+            using(var labelClip=c.PushClip(new Rect(left+32,top+3,labelWidth-38,40)))
+            {
+                Text(c,cluster.Items.Length>1?$"{cluster.Items.Length} 个{(listener?"监听器":"音源")} · 展开列表":e.name,left+34,top+5,brush);
+                Text(c,$"X {e.x:0.##} · Y {e.y:0.##} · Z {e.z:0.##}",left+34,top+25,size:10);
+            }
+            if(cluster.Items.Length>1)_expandHits.Add((label,cluster.Key));
+            else _hits.Add((label,e));
+        }
+        var expanded=clusters.FirstOrDefault(g=>_expanded.Contains(g.Key));
+        _contentHeight=expanded==null?0:expanded.Items.Length*34+40;
+        if(expanded!=null)
+        {
+            double left=Math.Max(20,Bounds.Width-290),top=112;
+            c.FillRectangle(Palette.Panel,new Rect(left,top,280,Math.Max(30,Bounds.Height-top-30)));
+            Text(c,$"{(expanded.Entity!="source"?"监听器":"音源")}列表 · {expanded.Items.Length} 个",left+12,top+10,Palette.Text,13);
+            using var clip=c.PushClip(new Rect(left,top+38,280,Math.Max(0,Bounds.Height-top-72)));
+            for(int i=0;i<expanded.Items.Length;i++)
+            {
+                var item=expanded.Items[i];var y=top+40+i*34-_vertical;
+                if(i%2==0)c.FillRectangle(Palette.Alternate,new Rect(left,y,280,34));
+                Text(c,item.name,left+12,y+3,Palette.Text,11);
+                Text(c,item.objectId+" · Y "+item.y.ToString("0.##"),left+12,y+19,size:9);
+                var hitTop=Math.Max(y,top+38);var hitBottom=Math.Min(y+34,Bounds.Height-30);if(hitBottom>hitTop)_hits.Add((new Rect(left,hitTop,280,hitBottom-hitTop),item));
+            }
+        }
+        Text(c,"耳朵 = 监听点 · 扬声器 = 音源 · 同点对象按类型分开聚合",22,Bounds.Height-23,size:11);
     }
+    private void DrawSpatialIcon(DrawingContext c,Point point,bool listener)
+    {
+        using var transform=c.PushTransform(Matrix.CreateScale(.78,.78)*Matrix.CreateTranslation(point.X-11,point.Y-11));
+        c.DrawGeometry(null,new Pen(listener?Palette.Listener:Palette.Voice,1.8),listener?EarIcon:SpeakerIcon);
+    }
+
 }

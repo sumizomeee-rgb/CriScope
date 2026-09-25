@@ -1,14 +1,35 @@
 # CriScope 数据与 Agent 接口
 
+## v3 默认接入：游戏主动回连
+
+桌面监听 TCP `18961`。游戏桥接先连接本进程的 CRI Monitor，核验 TCP 对端 PID 与进程启动时间后才发送命令；原生帧与 SDK 事件共同回传。服务不自动发现或主动连接游戏。多机可接入；同机原生固定端口冲突时明确降级 SDK，绝不误连其他进程。
+
+握手：ASCII `CSB3` + 4 字节大端 JSON 长度（最多 16 KiB）+ UTF-8 JSON：`version=3, clientId, captureId, name, machine, pid, platform`。clientId 为进程生命周期 GUID，captureId 为连接段 GUID。
+
+每帧 25 字节头：offset 0 为 int32 大端 payloadLength（最多 8 MiB）；offset 4 为 channel；offset 5 为 int64 大端 transport seq；offset 13 为 int32 大端 epoch；offset 17 为 int64 大端 observedMicroseconds。随后为 payload。
+
+- channel 1：完整原生 CRI 帧，保留原始时间。
+- channel 2：SDK WireEvent UTF-8 JSON，保留 SDK 时间。
+- channel 3：`{channel:1|2,status,connected}` 状态。
+- channel 4：`{first,last,count,channel:1|2,epoch,reason,captureId}` 缺失说明，可描述前一连接段。
+
+observedMicroseconds 仅作接收关联证据，不将原生与 SDK 时间强行对齐。每客户端显示一张卡片，内部通道有独立会话和事件序列。队列按完整帧有界；溢出中断段并报告缺失。native epoch 不得倒退。
+
+事件补充字段为 `clientId/machine/captureId/channel/epoch/observedTime/baseline`。`baseline=true` 仅标注记录起点的已观测状态，保持原始 seq/time，不能解释为此刻重新发生。`remove` 是空间对象销毁墓碑；缺失后旧状态不可继续作为已知状态。
+
+问题包 ZIP 内包含 `.criscope`、`manifest.json`、`screenshot.png` 与说明；伴随通道导出自身可用区间，不伪造同步范围。截图取自导出时应用渲染，不是历史重建截图。
+
+以下直接连接与 JSONL 为兼容/高级入口，默认交互使用上述桥接。
+
 ## 原生采集
 
 桌面主动连接配置的 CRI Monitor TCP 地址（默认 `127.0.0.1:2002`），发送 VERSION 与 START_LOG_RECORD，结束时尽力发送有超时限制的 STOP_LOG_RECORD。解析器支持已验证的 32/64 位大端帧布局，拒绝非法帧长度；未识别参数保留诊断，不以猜测值填充图表。接口为逆向观察得到的版本相关实现，不是官方兼容性承诺。
 
 会话来源为 `CRI Monitor`，事件 `source` 为 `cri-native`。Cue 请求使用 `request`，原生 Voice 使用 `play`/`stop` 并带 `entity=voice`。Voice 与 Playback 对象 ID 含采集段编号，避免重复开始采集后串联旧对象。`raw` 保存被解析的原生参数和来源，诊断中的原生 Block 请求不代表实际已跳转。
 
-## 可选 SDK TCP
+## 旧版 JSONL TCP 兼容
 
-Unity SDK 扩展连接 `127.0.0.1:18961`。UTF-8 JSONL，每行一个对象，首行示例：
+旧版扩展连接 `127.0.0.1:18961`。UTF-8 JSONL，每行一个对象，首行示例：
 
 ```json
 {"kind":"hello","session":"11111111222233334444555555555555","name":"CRI SDK","platform":"WindowsEditor","pid":1234,"value":1}
@@ -37,7 +58,7 @@ Unity SDK 扩展连接 `127.0.0.1:18961`。UTF-8 JSONL，每行一个对象，�
 
 ## 录制
 
-`.criscope` 为 UTF-8 JSONL，首行为版本 1 的 hello，之后是开始录制后接收的去重事件。它不含音频，不补录此前 Live 缓存。正常停止刷新文件，异常退出可能留下不完整末行。
+`.criscope` 为 UTF-8 JSONL，首行为版本 1 的 hello，之后可包含 `baseline=true` 的已观测起点状态（原始时间不变），再追加开始记录后接收的去重事件。它不含音频，不补录此前完整历史。正常停止刷新文件，异常退出可能留下不完整末行。
 
 Live 窗口限制为 120 秒或 120,000 条；回放每文件最多 2,000,000 条。打开原生录制也保留来源字段。重复加载同 ID 来源可能导致查询歧义，需仅保留一个要查询的来源。
 

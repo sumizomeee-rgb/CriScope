@@ -1,44 +1,46 @@
 # CriScope
 
-CriScope 是独立的 Windows CRI 音频观测工具，使用 .NET 10 与 Avalonia 构建。主数据源直接连接游戏的 **CRI 原生 Monitor TCP 端口**，不需要在播放、暂停或 AISAC 业务封装里打点。可选 Unity SDK 扩展补充内存、流式声池和回调信息。
+CriScope 是独立的 Windows CRI 音频观测工具，使用 .NET 10 与 Avalonia 构建。游戏侧通用桥接连接本进程的 **CRI 原生 Monitor TCP 端口**，并主动回连桌面服务，不需要在播放、暂停或 AISAC 业务封装里打点。可选 Unity SDK 扩展补充内存、流式声池和回调信息。
 
 ## 运行
 
 1. 解压发布包并启动 `CriScope.exe`，无需另装 .NET。
-2. 确保目标游戏的 CRI Monitor 已开启，在左侧输入 `127.0.0.1:2002` 并连接。原生连接从连接时开始采集，不补齐此前历史。请避免同时使用其他 Profiler 占用同一 Monitor。
-3. 左侧选择会话，通过播放、控制、混音、空间、资源五个工作区查看数据；详细证据和原始字段放在诊断区。
-4. “录制当前会话”保存事件文件，与游戏采集开关独立。录制不包含声音，回放只浏览事件。
+2. 游戏音频调试区末尾填写 CriScope 服务地址，默认 `127.0.0.1`；打开唯一采集开关即可自动接入。远程填写运行 CriScope 的电脑 IP，确保该电脑 TCP `18961` 可达。
+3. 桌面左侧每个进程实例一张卡片；同一卡片可切换原生与 SDK 通道，各自保留独立时钟。通过声音时间线、控制、混音、空间、资源查看数据。
+4. “开始记录日志”开始保存，“停止并保存”结束，界面显示保存路径。记录不包含声音。“导出问题包”包含选区（没有选区则为可见范围）、伴随通道可用记录、当前界面截图、问题描述及缺失说明。
 
-Live 内存最多保留 120 秒或 120,000 条事件，另保留最多 8,192 项最后已知状态供视图使用（原时间不变，不加入录制和事件分页）；冻结仅暂停视图。点击事件和 Ctrl+滚轮缩放不会自动关闭 Live。历史单文件最多加载 2,000,000 条事件，该上限不代表已验证的交互性能。
+支持多台电脑回连。同机多个游戏的 SDK 通道可接入，但当前 CRI 固定原生端口不能保证每个进程同时采集；桥接验证端口所属 PID，错误进程明确拒绝，绝不把别的游戏数据显示到当前卡片。
 
-默认录制位置为 EXE 同目录 `.local/recordings`；`CRISCOPE_DATA` 可以覆盖录制目录。启动参数：`--connect 127.0.0.1:2002`、`--open <文件.criscope>`、`--light`、`--mcp`。同机只运行一个桌面接收器。
+Live 内存每通道最多保留 120 秒或 120,000 条事件，另保留最多 8,192 项已观测状态（保留原始时间）。日志开始时保存明确标记的状态基线，之后追加新事件。冻结只暂停视图，点击事件不会自动冻结。历史单文件最多加载 2,000,000 条事件，该上限不代表已验证的交互性能。
+
+默认日志位置为 EXE 同目录 `.local/recordings`；`CRISCOPE_DATA` 可覆盖。高级兼容启动参数保留 `--connect 127.0.0.1:2002`，正常使用无需它。另有 `--open <文件.criscope>`、`--light`、`--mcp`。同机只运行一个桌面接收器。
 
 ## 数据口径
 
 | 工作区 | 内容与边界 |
 | --- | --- |
-| 播放 | 原生 Voice 生命周期与 Cue 播放请求；请求不等于声部已经播放 |
+| 声音时间线 | 按 Playback 分组显示 Cue 播放实例，可展开其 Voice；同名 Cue 不合并，父子关系不是 Cue 嵌套 |
 | 控制 | AISAC 写入、Selector/Label、Block 请求与 SDK 回调；不会猜测连接前的值 |
 | 混音 | 原生 Bus 通道峰值/RMS 与响度；缺失数据表示未采集，不能当成零 |
-| 空间 | 原生声源与 Listener 位置；可观察 CRI 位置，不保证对应 Unity GameObject 名称 |
+| 空间 | 原生音源、Listener 及已知字段推导的衰减参考点；通过真实播放关联标注 Cue，不猜测 GameObject 名称或未知位置 |
 | 资源 | 原生 CPU、声部、流式使用量；可选 SDK Atom/FS 内存和流式声池容量 |
 
-原生与 SDK 会话使用各自的时钟。相同 PID 的 SDK 最新资源数值可供原生资源页参考，但不会把两个未经校准的时间轴混在一起。方向等高频重复更新会变更采样；诊断记录保留其口径，不声称是无损原始包抓取。
+原生与 SDK 使用各自的时钟，不把未经校准的时间轴混在一起。录制保留解析事件与原生参数，不声称是无损网络包抓取。缺失与断线会保留明确记录；未知值不当成零。
 
-## 可选 Unity SDK 扩展
+## Unity 通用桥接
 
-将 `integrations/unity` 下的三个 C# 文件复制到已安装 CRI Unity SDK 的工程。在游戏调试菜单主线程调用：
+将 `integrations/unity` 中的 C# 文件复制到已安装 CRI Unity SDK 的工程。在游戏调试菜单主线程调用：
 
 ```csharp
-CriScope.Unity.CriScopeDiagnostics.SetCaptureEnabled(true);
+CriScope.Unity.CriScopeDiagnostics.SetCaptureEnabled(true, "127.0.0.1");
 CriScope.Unity.CriScopeDiagnostics.SetCaptureEnabled(false);
 ```
 
-扩展直接使用 CRI SDK，不依赖项目音频管理器。开启后连接本机 `18961`，以约 500 ms 周期采样 Atom/FS 内存、StandardStreaming 声池使用量，订阅 BeatSync 和 Sequence，并对可观察 Playback 轮询 Block。Block 轮询不是精确音频切换回调，也不覆盖所有自定义原生 Player。BeatSync 依赖 Cue 实际配置，不会从名称猜测 BPM。
+桥接不依赖业务音频管理器，不给播放、暂停、AISAC 业务方法添加采集点。开启后连接桌面 `18961`，转发原生 Monitor 帧；约 500 ms 采样 Atom/FS 内存、StandardStreaming 声池，订阅 BeatSync/Sequence，并对 SDK 可观察 Playback 轮询 Block。Block 轮询不是精确切换回调，不覆盖所有自定义原生 Player；BeatSync 依赖 Cue 实际配置。
 
-关闭时移除采样组件和回调订阅，停止扩展传输。默认 Release 编译排除采集实现；Editor/Development Build 也只有显式开启后才创建采集对象。项目原有 Monitor 若已开启，关闭此扩展不会擅自关闭它，因此不能把“扩展关闭”解释成“整个 CRI Monitor 无开销”。
+关闭会移除采样组件与回调，停止网络、线程及重试，并停止本桥接原生订阅。普通 Release 默认编译排除采集实现；Editor/Development Build 未开启时不创建采集对象。项目原本就打开的 Monitor 仍归项目所有，其原有开销不能算作 CriScope 新增开销；性能基线需结合项目本身 IGP 配置。
 
-对于 Monitor 未开启的 Windows x64 客户端，扩展提供严格 DLL SHA-256 与指令校验的版本适配器进行热启停。它使用非公开接口，未知版本拒绝调用，不能宣称通用于所有 CRI 版本。Monitor 启停可能产生短暂停顿；不要在性能基线测量期间切换。工程应自行将 Player 默认 IGP 配置为关闭。
+Monitor 未开启的 Windows x64 客户端可使用严格 DLL SHA-256 与指令校验的热启停适配器。它使用非公开接口，未知版本拒绝调用，不能宣称通用于所有 CRI 版本。Monitor 启停允许短暂停顿。不要为了接入改写项目原有 IGP 默认配置。
 
 ## Agent 接口
 

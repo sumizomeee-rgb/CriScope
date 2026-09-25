@@ -6,16 +6,22 @@ public sealed class Session : IDisposable
     private readonly object gate = new();
     private readonly Queue<WireEvent> events = new();
     // Latest known state is separate from the event window: it is never replayed into
-    // recordings, pagination, Total or Watermark, and retains its original timestamp.
+    // pagination, Total or Watermark; explicit recording baselines retain original timestamps.
     private readonly Dictionary<string, WireEvent> viewState = new();
     private readonly Dictionary<string, double> endedVoices = new();
     private StreamWriter? writer;
     private DateTime flushed = DateTime.UtcNow;
     private long watermark;
+    private long recordedThroughSequence;
+    private double recordedThroughTime;
     public const int MaxLiveEvents = 120000;
     public const double LiveSeconds = 120;
     public const int MaxViewStates = 8192;
     public long ViewStatesEvicted { get; private set; }
+    public string ClientId { get; }
+    public string Machine { get; }
+    public string CaptureId { get; }
+    public string Channel { get; }
     public string Id { get; }
     public string Source { get; }
     public string Endpoint { get; }
@@ -34,7 +40,7 @@ public sealed class Session : IDisposable
     public long Evicted { get; private set; }
     public double LastTime { get; private set; }
     public long Watermark { get { lock(gate) return watermark; } }
-    public Session(WireEvent hello) { Id=hello.session; Name=hello.name; Platform=hello.platform; Pid=hello.pid; Source=string.IsNullOrWhiteSpace(hello.source)?"CRI SDK":hello.source; Endpoint=hello.detail; }
+    public Session(WireEvent hello) { Id=hello.session; Name=hello.name; Platform=hello.platform; Pid=hello.pid; Source=string.IsNullOrWhiteSpace(hello.source)?"CRI SDK":hello.source; Endpoint=hello.detail; ClientId=hello.clientId; Machine=hello.machine; CaptureId=hello.captureId; Channel=hello.channel; }
     public WireEvent[] Snapshot() { lock(gate) return events.ToArray(); }
     public WireEvent[] ViewSnapshot()
     {
@@ -49,22 +55,24 @@ public sealed class Session : IDisposable
     private void UpdateViewState(WireEvent e)
     {
         if(IsReplay) return;
-        if(e.entity=="capture-segment") {viewState.Clear();endedVoices.Clear();return;}
+        if(e.entity=="capture-segment" || e.kind=="gap") {viewState.Clear();endedVoices.Clear();return;}
         string? key = e.kind switch {
             "play" => "voice|"+e.objectId,
             "request" => "cue|"+e.objectId,
             "aisac" or "selector" => e.kind+"|"+e.objectId+"|"+e.name,
-            "position" => "position|"+e.entity+"|"+e.objectId,
+            "position" or "remove" => "position|"+e.entity+"|"+e.objectId,
             "metric" => "metric|"+e.objectId+"|"+e.name,
             "bus" => "bus|"+e.objectId,
             _ => null };
         if(e.kind=="selector" && e.detail.Contains("清除全部"))
             foreach(var oldKey in viewState.Keys.Where(k=>k.StartsWith("selector|"+e.objectId+"|",StringComparison.Ordinal)).ToArray()) viewState.Remove(oldKey);
         if(e.kind=="stop" && viewState.ContainsKey("voice|"+e.objectId)) endedVoices["voice|"+e.objectId]=e.time;
+        if(e.entity=="cue" && (e.kind=="stop" || e.detail.Contains("播放实例释放",StringComparison.Ordinal)))
+            endedVoices["cue|"+e.objectId]=e.time;
         if(key!=null)
         {
             viewState[key]=e;
-            if(e.kind=="play") endedVoices.Remove(key);
+            if(e.kind is "play" or "request") endedVoices.Remove(key);
             if(viewState.Count>MaxViewStates)
             {
                 var oldest=viewState.MinBy(pair=>pair.Value.seq).Key;
@@ -96,6 +104,7 @@ public sealed class Session : IDisposable
             {
                 try {
                     writer.WriteLine(raw ?? e.ToJson());
+                    recordedThroughSequence=e.seq; recordedThroughTime=LastTime;
                     if((DateTime.UtcNow-flushed).TotalSeconds>=1) {writer.Flush();flushed=DateTime.UtcNow;}
                 } catch(Exception ex) when(ex is IOException or UnauthorizedAccessException) { Error="录制写盘失败："+ex.Message; CloseWriter(); }
             }
@@ -112,10 +121,50 @@ public sealed class Session : IDisposable
             Directory.CreateDirectory(directory);
             var path=Path.Combine(directory,$"{DateTime.Now:yyyyMMdd-HHmmss-fff}_{Pid}_{Guid.NewGuid():N}.criscope");
             var next=new StreamWriter(new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.Read),new UTF8Encoding(false));
-            try { next.WriteLine(new WireEvent {kind="hello",session=Id,name=Name,pid=Pid,platform=Platform,source=Source,value=1,detail="CriScope/1; recording begins here; no pre-roll"}.ToJson());next.Flush(); }
+            try {
+                next.WriteLine(new WireEvent {kind="hello",session=Id,name=Name,pid=Pid,platform=Platform,source=Source,
+                    clientId=ClientId,machine=Machine,captureId=CaptureId,channel=Channel,value=1,
+                    detail="CriScope/1; explicit baseline retains original observation times; subsequent events are incremental"}.ToJson());
+                foreach(var ev in Baseline()) next.WriteLine(ev.ToJson());
+                next.Flush();
+            }
             catch {next.Dispose();throw;}
             writer=next;RecordingPath=path;Error=null;
+            recordedThroughSequence=watermark;recordedThroughTime=LastTime;
         }
+    }
+    public (WireEvent[] Events, bool FromRecording, bool HasUnrecordedGap, long ContextAfterSequence, long RecordedThroughSequence, double RecordedThroughTime) EvidenceSnapshot()
+    {
+        string path; long endSequence, fileLength, recordedEnd; double recordedTime; WireEvent[] live;
+        lock(gate)
+        {
+            writer?.Flush(); path=RecordingPath; endSequence=watermark;
+            live=events.ToArray();recordedEnd=recordedThroughSequence;recordedTime=recordedThroughTime;
+            if(string.IsNullOrEmpty(path) || !File.Exists(path)) return (live, false, false, 0, 0, 0);
+            fileLength=new FileInfo(path).Length;
+        }
+        var lines = new List<WireEvent>();
+        using var reader = new StreamReader(new ReadWindowStream(new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.ReadWrite),fileLength));
+        string? line;
+        while((line=reader.ReadLine())!=null)
+        {
+            var ev=WireEvent.Parse(line);
+            if(ev.seq>endSequence) break;
+            if(ev.kind!="hello") lines.Add(ev);
+            if(lines.Count>2000000) throw new InvalidDataException("问题包超过200万事件，请分段记录");
+        }
+        var newTail=live.Where(e=>e.seq>recordedEnd).ToArray();
+        bool missing=newTail.Length>0 && newTail[0].seq>recordedEnd+1;
+        // Prefer recorded entries for duplicate sequence numbers: explicit recording
+        // baselines must retain their baseline flag and original observation time.
+        var merged=lines.Concat(live).GroupBy(e=>e.seq).Select(g=>g.First()).OrderBy(e=>e.seq).ToArray();
+        return (merged,true,missing,missing?newTail[0].seq:0,recordedEnd,recordedTime);
+    }
+    public WireEvent[] Baseline()
+    {
+        lock(gate)
+            return viewState.Where(pair=>!endedVoices.ContainsKey(pair.Key)).Select(pair=>pair.Value).OrderBy(e=>e.seq)
+                .Select(e=> {var copy=WireEvent.Parse(e.ToJson());copy.baseline=true;return copy;}).ToArray();
     }
     public void StopRecording() { lock(gate) CloseWriter(); }
     private void CloseWriter() {var old=writer;writer=null;try {old?.Dispose();} catch(Exception ex) {Error="结束写盘失败："+ex.Message;} }

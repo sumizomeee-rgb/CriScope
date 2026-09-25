@@ -15,6 +15,10 @@ public sealed class NativeEventMapper(string session)
     private readonly Dictionary<string, (float X, float Y, float Z)> positions = new();
     private readonly Dictionary<string, int> suppressed = new();
     private readonly Dictionary<string, (string Value, double Time)> spatialState = new();
+    private readonly Dictionary<string, Dictionary<string, (object Value, ulong Time)>> listeners = new();
+    private readonly Dictionary<string, string> voiceSources = new();
+    private readonly Dictionary<string, ulong> positionTimes = new();
+    private readonly Dictionary<string, string> positionEvidence = new();
     private double lastSummary;
     private int segment;
     public long Sequence => sequence;
@@ -37,6 +41,7 @@ public sealed class NativeEventMapper(string session)
             captureStart = packet.TimeMicroseconds;
             segment++;
             playbacks.Clear(); playerCues.Clear(); voices.Clear(); positions.Clear(); spatialState.Clear();
+            listeners.Clear(); voiceSources.Clear(); positionTimes.Clear(); positionEvidence.Clear();
         }
         double time = Math.Max(captureStart, packet.TimeMicroseconds) / 1_000_000d;
         lastTime = Math.Max(lastTime, time);
@@ -56,6 +61,18 @@ public sealed class NativeEventMapper(string session)
             kind = kind, session = session, seq = ++sequence, time = time, name = name, objectId = id,
             value = value, source = "cri-native", entity = entity, parentId = parent, raw = raw, detail = detail
         };
+        WireEvent? SourcePosition(string id)
+        {
+            if (!positions.TryGetValue(id, out var pos)) return null;
+            var links = voiceSources.Where(v => v.Value == id && voices.ContainsKey(v.Key)).Select(v => voices[v.Key]).Distinct()
+                .Select(owner => new { playback = owner, cue = playbacks.GetValueOrDefault(owner).Name ?? "Cue 名称未知" }).ToArray();
+            var ev = E("position", links.Length == 0 ? "音源（未观测到播放关联）" : string.Join(" · ", links.Select(v => v.cue).Distinct()),
+                id, entity: "source", detail: "CRI 音源世界坐标；名称来自原生 Voice/Cue 关联，不是 GameObject 名称");
+            ev.x = pos.X; ev.y = pos.Y; ev.z = pos.Z;
+            ev.raw = JsonSerializer.Serialize(new { native = JsonSerializer.Deserialize<JsonElement>(raw),
+                derived = new { links, positionObservedAtMicroseconds = positionTimes.GetValueOrDefault(id), positionEvidence = positionEvidence.GetValueOrDefault(id) } });
+            return ev;
+        }
         if (packet.Command != 31)
         {
             yield return E("log", "原生连接消息", detail: $"command={packet.Command}; control={packet.Control}");
@@ -74,6 +91,37 @@ public sealed class NativeEventMapper(string session)
         {
             bool listener = f.Contains("Listener", StringComparison.Ordinal);
             string spatialId = S(listener ? "CriAtomEx3dListenerHn" : "CriAtomEx3dSourceHn");
+            if (f.EndsWith("_Destroy", StringComparison.Ordinal))
+            {
+                positions.Remove(spatialId); positionTimes.Remove(spatialId); positionEvidence.Remove(spatialId); listeners.Remove(spatialId);
+                foreach (var key in spatialState.Keys.Where(k => k.StartsWith(spatialId + "/", StringComparison.Ordinal)).ToArray()) spatialState.Remove(key);
+                foreach (var key in voiceSources.Where(v => v.Value == spatialId).Select(v => v.Key).ToArray()) voiceSources.Remove(key);
+                yield return E("remove", listener ? "Listener 已销毁" : "音源已销毁", spatialId, entity: listener ? "listener" : "source", detail: "原生对象销毁");
+                if (listener) yield return E("remove", "衰减监听点已移除", spatialId, entity: "distance-listener", detail: "所属 Listener 已销毁");
+                yield break;
+            }
+            if (listener && spatialId.Length > 0)
+            {
+                if (!listeners.TryGetValue(spatialId, out var state)) listeners[spatialId] = state = new();
+                foreach (var value in p.Where(v => v.Name is "3dPosVector_Position" or "3dPosVector_FocusPoint" or "3dDistanceFocusLevel" or "3dDirectionFocusLevel"))
+                    state[value.Name] = (value.Value, packet.TimeMicroseconds);
+                if (f == "Ex3dListener_Update" && state.TryGetValue("3dDistanceFocusLevel", out var level))
+                {
+                    double weight = Convert.ToDouble(level.Value, CultureInfo.InvariantCulture);
+                    float[]? basePos = state.GetValueOrDefault("3dPosVector_Position").Value as float[];
+                    float[]? focus = state.GetValueOrDefault("3dPosVector_FocusPoint").Value as float[];
+                    if (weight >= 0 && weight <= 1 && (weight == 1 || basePos is { Length: 3 }) && (weight == 0 || focus is { Length: 3 }))
+                    {
+                        var distance = E("position", "衰减监听点", spatialId, entity: "distance-listener", detail: "Listener Update 提交；(1−权重)×Listener + 权重×Focus");
+                        double Axis(int index) => weight == 0 ? basePos![index] : weight == 1 ? focus![index] : (1-weight)*basePos![index]+weight*focus![index];
+                        distance.x=Axis(0);distance.y=Axis(1);distance.z=Axis(2);
+                        distance.raw=JsonSerializer.Serialize(new { native=JsonSerializer.Deserialize<JsonElement>(raw), derived=new {
+                            formula="(1-distanceFocusLevel)*listenerPosition+distanceFocusLevel*focusPoint", committedAtMicroseconds=packet.TimeMicroseconds,
+                            inputs=state.Select(v=>new { name=v.Key, value=v.Value.Value, observedAtMicroseconds=v.Value.Time }) } });
+                        yield return distance;
+                    }
+                }
+            }
             foreach (var (label, keys) in new[] {
                 ("朝向", new[] { "3dPosVector_Forward", "3dPosVector_Upward" }),
                 ("聚焦", new[] { "3dPosVector_FocusPoint", "3dDistanceFocusLevel", "3dDirectionFocusLevel" }),
@@ -83,13 +131,13 @@ public sealed class NativeEventMapper(string session)
                 if (state.Length == 0) continue;
                 string key = spatialId + "/" + label + "/" + string.Join(",", state.Select(v => v.Name));
                 string value = JsonSerializer.Serialize(state.Select(v => new { v.Name, v.Value }));
-                if (spatialState.TryGetValue(key, out var prior) && (prior.Value == value || time - prior.Time < 0.1))
+                if (spatialState.TryGetValue(key, out var prior) && prior.Value == value)
                     suppressed[f + "/" + label] = suppressed.GetValueOrDefault(f + "/" + label) + 1;
                 else
                 {
                     spatialState[key] = (value, time);
                     yield return E("log", (listener ? "Listener " : "音源 ") + label, spatialId,
-                        entity: listener ? "listener" : "source", detail: "变更采样，最多 10 Hz；完整向量见原生详情");
+                        entity: listener ? "listener" : "source", detail: "原生字段变更；完整向量见原生详情");
                 }
             }
             if (!Has("3dPosVector_Position") && (f.Contains("SetOrientation") || f.Contains("SetVelocity") || f.Contains("Focus"))) yield break;
@@ -108,17 +156,28 @@ public sealed class NativeEventMapper(string session)
             var ev = E("request", name, playback, entity: "cue", parent: player,
                 detail: packet.TimeMicroseconds < captureStart ? "连接时已有播放；起点未知" : "CRI Cue 播放实例；不等同于实际 Voice");
             ev.cue = playerCues.TryGetValue(player, out var selectedCue) ? selectedCue.Cue : -1;
-            yield return ev; yield break;
+            yield return ev;
+            foreach (var source in voiceSources.Where(v => voices.GetValueOrDefault(v.Key) == playback).Select(v => v.Value).Distinct())
+                if (SourcePosition(source) is { } sourceEvent) yield return sourceEvent;
+            yield break;
         }
         if (f is "SoundVoice_Allocate" or "SoundVoice_FreeVoice")
         {
             string id = $"voice:{segment}:" + S("CriAtomSoundVoiceId_unique64");
-            if (f == "SoundVoice_Allocate") voices[id] = playback;
+            string? changedSource = null;
+            if (f == "SoundVoice_Allocate")
+            {
+                voices[id] = playback;
+                if (Has("CriAtomEx3dSourceHn") && S("CriAtomEx3dSourceHn") is not ("" or "0x0"))
+                    voiceSources[id] = changedSource = S("CriAtomEx3dSourceHn");
+            }
             else if (voices.Remove(id, out var owner)) playback = owner;
+            if (f == "SoundVoice_FreeVoice" && voiceSources.Remove(id, out var oldSource)) changedSource = oldSource;
             var info = playbacks.GetValueOrDefault(playback);
             yield return E(f == "SoundVoice_Allocate" ? "play" : "stop", info.Name ?? "Voice", id, entity: "voice", parent: playback,
                 detail: f == "SoundVoice_FreeVoice" ? "原生 Voice 释放；reason=" + S("VoiceStopReason") :
                 packet.TimeMicroseconds <= captureStart ? "连接时已存在 Voice；起点未知" : "原生 Voice 分配");
+            if (changedSource != null && SourcePosition(changedSource) is { } changedPosition) yield return changedPosition;
             yield break;
         }
         if (f == "ExPlaybackInfo_FreeInfo")
@@ -186,11 +245,13 @@ public sealed class NativeEventMapper(string session)
             if (coordinates.All(float.IsFinite))
             {
                 var position = (coordinates[0], coordinates[1], coordinates[2]);
+                positionTimes[id] = packet.TimeMicroseconds; positionEvidence[id] = raw;
                 if (positions.TryGetValue(id, out var previous) && previous == position)
                 {
                     suppressed[f] = suppressed.GetValueOrDefault(f) + 1; yield break;
                 }
                 positions[id] = position;
+                if (!listener) { if (SourcePosition(id) is { } sourceEvent) yield return sourceEvent; yield break; }
                 var ev = E("position", listener ? "Listener" : "音源", id, entity: listener ? "listener" : "source", detail: "世界坐标");
                 ev.x = coordinates[0]; ev.y = coordinates[1]; ev.z = coordinates[2]; yield return ev;
             }

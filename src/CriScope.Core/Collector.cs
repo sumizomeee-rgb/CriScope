@@ -16,9 +16,9 @@ public sealed partial class Collector : IDisposable
     public Collector(string directory) {RecordingsDirectory=directory;}
     public void Start(int port=18961)
     {
-        listener=new TcpListener(IPAddress.Loopback,port);
+        listener=new TcpListener(IPAddress.Any,port);
         try {listener.Start();} catch(SocketException e) {Status=$"接入端口 {port} 不可用：{e.Message}（检查其他 CriScope 实例）";throw;}
-        Status=$"本机接入 127.0.0.1:{port}";
+        Status=$"等待游戏接入 · 端口 {port}";
         _=AcceptLoop();
     }
     async Task AcceptLoop()
@@ -26,7 +26,7 @@ public sealed partial class Collector : IDisposable
         try {while(!stop.IsCancellationRequested) {var client=await listener!.AcceptTcpClientAsync(stop.Token);_=ReadClient(client);}}
         catch(Exception e) when(e is OperationCanceledException or SocketException or ObjectDisposedException) {if(!stop.IsCancellationRequested) Status=e.Message;}
     }
-    async Task ReadClient(TcpClient client)
+    async Task ReadLegacyClient(TcpClient client)
     {
         Session? session=null;
         try
@@ -92,5 +92,5 @@ public sealed partial class Collector : IDisposable
         sessions["replay:"+Guid.NewGuid()]=replay;
         return replay;
     }
-    public void Dispose() {stop.Cancel();DisposeNative();listener?.Stop();foreach(var c in active.Values)c.Dispose();foreach(var s in sessions.Values)s.Dispose();}
+    public void Dispose() {stop.Cancel();DisposeNative();listener?.Stop();foreach(var c in active.Values)c.Dispose();foreach(var c in bridgeClients.Values)c.Dispose();foreach(var s in sessions.Values)s.Dispose();}
 }

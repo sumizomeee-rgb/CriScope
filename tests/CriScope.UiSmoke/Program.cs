@@ -7,6 +7,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Interactivity;
 using Avalonia.Media.Imaging;
 using Avalonia.Themes.Fluent;
+using Avalonia.VisualTree;
 using CriScope.App;
 using CriScope.Core;
 
@@ -35,6 +36,32 @@ public sealed class SmokeApp : Application
                 int passed = 0;
                 try
                 {
+                    var lifecycle = new[] {
+                        new WireEvent {kind="request",entity="cue",objectId="pb1",name="Same Cue",time=1},
+                        new WireEvent {kind="request",entity="cue",objectId="pb2",name="Same Cue",time=2},
+                        new WireEvent {kind="play",entity="voice",objectId="v1",parentId="pb1",time=1},
+                        new WireEvent {kind="play",entity="voice",objectId="v2",parentId="pb1",time=1},
+                        new WireEvent {kind="play",entity="voice",objectId="v3",parentId="pb2",time=2}};
+                    var playbackGroups = PlaybackPresentation.Group(lifecycle, 10);
+                    Check(playbackGroups.Length == 2 && playbackGroups.Single(g=>g.Id=="pb1").Voices.Length == 2, "同名 Cue 的两个 Playback 不合并，Voice 归所属实例");
+                    Check(PlaybackPresentation.Group([new WireEvent {kind="stop",entity="voice",objectId="unknown",time=2}],10).Single().UnknownStart, "缺失 Playback 开始保持未知");
+                    Check(PlaybackPresentation.LatestLabel("beat").Contains("节拍") && !PlaybackPresentation.LatestLabel("beat").Contains("写入"), "节拍使用事件语义文案");
+                    var clientId = Guid.NewGuid().ToString("N");
+                    void Connected(Session target, bool value) => typeof(Session).GetProperty("Connected")!.SetValue(target,value);
+                    Session Meta(string client, string channel, string capture="")
+                    {
+                        var target = new Session(new WireEvent {kind="hello",session=Guid.NewGuid().ToString("N"),clientId=client,captureId=capture,channel=channel,pid=99,name="test"});
+                        Connected(target,true); return target;
+                    }
+                    var native=Meta(clientId,"native"); var sdk=Meta(clientId,"sdk"); var other=Meta(Guid.NewGuid().ToString("N"),"native");
+                    Check(ClientCardPresentation.Group([native,sdk,other]).Length==2 && ClientCardPresentation.Default([sdk,native])==native, "客户端按 ClientId 归组，默认原生通道，不按相同 PID 合并");
+                    var spatial=new[]{new WireEvent {kind="position",entity="source",objectId="s1",time=1},new WireEvent {kind="position",entity="source",objectId="s2",time=1},new WireEvent {kind="position",entity="listener",objectId="l",time=1},new WireEvent {kind="position",entity="distance-listener",objectId="l",time=1}};
+                    var discontinuous = spatial.Append(new WireEvent {kind="gap",time=3,seq=10}).ToArray();
+                    Check(SpatialPresentation.Group(discontinuous,10).Length==0 && SpatialPresentation.Group(discontinuous,2).Length==2, "缺失后清除空间旧点，历史视野仍按历史边界显示");
+                    Check(SpatialPresentation.Group(spatial.Append(new WireEvent {kind="state",entity="capture-segment",time=3}),10).Length==0, "新采集段不沿用之前位置");
+                    var spatialGroups=SpatialPresentation.Group(spatial,10);
+                    Check(spatialGroups.Length==2 && spatialGroups.Single(g=>g.Entity=="source").Items.Length==2 && SpatialPresentation.Group(spatial,10,true).Length==3, "同点音源和监听点分别聚合，基础监听器显式可选");
+                    Check(SpatialPresentation.Group(spatial.Append(new WireEvent {kind="remove",entity="listener",objectId="l",time=2}),10).All(g=>g.Entity=="source"), "销毁监听器清除衰减点，不留假位置");
                     Check(MetricPresentation.Value(new WireEvent { objectId = "stream.bps", value = 1023000 }) == "1.023 Mbit/s", "原生 bit/s 显示 Mbit/s");
                     Check(MetricPresentation.Value(new WireEvent { detail = "bit/s", value = 48000 }) == "48 kbit/s", "小流量显示 kbit/s");
                     Check(MetricPresentation.Value(new WireEvent { objectId = "CpuLoad", value = .5 }) == "0.5 %" && MetricPresentation.Value(new WireEvent { objectId = "AverageServerTime", value = 320 }) == "320 µs", "CPU 与服务耗时单位");
@@ -42,6 +69,10 @@ public sealed class SmokeApp : Application
                     Check(MetricPresentation.Name(new WireEvent { objectId = "stream.used" }) == "流式播放声部（原生）" && MetricPresentation.Name(new WireEvent { name = "voices.streaming.used" }) == "Streaming 声池", "原生声部与 SDK 声池口径分开");
                     Check(MetricPresentation.StreamingPool(new WireEvent { value = 1 }, new WireEvent { value = 16 }) == "1 / 16" && MetricPresentation.StreamingPool(new WireEvent { value = 1 }, null) == "1 / 未提供", "Streaming 池用量容量及缺失容量");
                     await Task.Delay(400);
+                    Check(window.WindowDecorations==WindowDecorations.BorderOnly && window.CanResize && window.ShowInTaskbar, "自定义标题栏保留 resize 与任务栏");
+                    var maximize=window.GetVisualDescendants().OfType<Button>().Single(button=>ToolTip.GetTip(button)?.ToString()=="最大化 / 还原");
+                    Click(maximize); await Task.Delay(120); Check(window.WindowState==WindowState.Maximized,"自定义最大化按钮");
+                    Click(maximize); await Task.Delay(120); Check(window.WindowState==WindowState.Normal,"自定义还原按钮");
                     Select(a);
                     Check(ReferenceEquals(Field<Session>("_session"), a) && Field<WireEvent[]>("_snapshot").All(e => e.session == a.Id), "同名会话 A 数据归属");
                     window.ApplyUiAction("filter", "Alpha"); Select(b);
@@ -96,10 +127,71 @@ public sealed class SmokeApp : Application
                     b.Accept(Event(b, 2, "Beta-recorded")); Click(Field<Button>("_record"));
                     Check(a.Recording && !b.Recording, "停止 B 不影响 A"); Select(a); Click(Field<Button>("_record"));
                     Check(!a.Recording && File.Exists(a.RecordingPath), "停止 A 完成录制文件");
+                    Check(Field<StackPanel>("_savedPanel").IsVisible && Field<TextBlock>("_savedNotice").Text!.Contains(a.RecordingPath), "停止并保存明确显示日志路径");
+                    var pairNative=Meta(clientId,"native","take-1"); var pairSdk=Meta(clientId,"sdk","take-1");
+                    var olderSdk=Meta(clientId,"sdk","take-0");
+                    sessions[pairNative.Id]=pairNative; sessions[pairSdk.Id]=pairSdk; sessions[olderSdk.Id]=olderSdk;
+                    Select(pairNative); Click(Field<Button>("_record"));
+                    Check(pairNative.Recording && pairSdk.Recording && !olderSdk.Recording, "一次开始同时录制本次采集双通道，不跨 CaptureId");
+                    var late=Meta(clientId,"sdk","take-1"); sessions[late.Id]=late; await Task.Delay(650);
+                    Check(late.Recording, "同次采集稍晚接入的通道自动加入日志记录");
+                    Select(pairSdk); Check(State().GetProperty("recording").GetBoolean(), "切换同卡通道保留整体录制状态");
+                    Click(Field<Button>("_record"));
+                    Check(!pairNative.Recording && !pairSdk.Recording && !late.Recording && new[]{pairNative.RecordingPath,pairSdk.RecordingPath,late.RecordingPath}.Distinct().Count()==3 && File.Exists(pairNative.RecordingPath) && File.Exists(pairSdk.RecordingPath), "任一通道停止全部，同次采集保留独立日志文件");
+                    Check(Field<TextBlock>("_savedNotice").Text!.Contains("3 个通道日志"), "多通道保存反馈明确文件数");
+                    Click(Field<Button>("_record"));
+                    Connected(pairNative,false); await Task.Delay(350);
+                    Check(pairNative.Recording && pairSdk.Recording, "单个通道断开时仍保留本次采集记录");
+                    Connected(pairSdk,false); Connected(late,false); await Task.Delay(650);
+                    var disconnectedPaths = new[]{pairNative.RecordingPath,pairSdk.RecordingPath,late.RecordingPath};
+                    Check(!pairNative.Recording && !pairSdk.Recording && !late.Recording && !State().GetProperty("recording").GetBoolean() && Field<StackPanel>("_savedPanel").IsVisible, "全部通道断开自动保存并退出录制状态");
+                    foreach(var path in disconnectedPaths) { using var exclusive=File.Open(path,FileMode.Open,FileAccess.ReadWrite,FileShare.None); }
+                    Check(disconnectedPaths.All(File.Exists), "断开自动收尾后独立日志已释放文件句柄");
+                    var reconnected=Meta(clientId,"native","take-2"); sessions[reconnected.Id]=reconnected;
+                    var lateDisconnected=Meta(clientId,"sdk","take-1"); Connected(lateDisconnected,false); sessions[lateDisconnected.Id]=lateDisconnected;
+                    await Task.Delay(650);
+                    Check(!reconnected.Recording && !lateDisconnected.Recording && !pairNative.Recording && pairNative.RecordingPath==disconnectedPaths[0], "重连的新采集与旧断开通道不自动重开已结束日志");
+                    Select(a);
+                    window.ApplyUiAction("range", "1:3");
+                    Check(window.CurrentTimeRange()==(1d,3d), "问题包导出获取当前时间范围");
+                    string? problemDescription=null;
+                    window.ExportProblemAsync = _ => { problemDescription=window.ProblemDescription;return Task.FromResult(a.RecordingPath); };
+                    var exportButton=window.GetVisualDescendants().OfType<Button>().Single(button=>ToolTip.GetTip(button)?.ToString()=="导出问题包");
+                    Click(exportButton);await Task.Delay(150);
+                    var exportDialog=desktop.Windows.Single(w=>w!=window);
+                    exportDialog.GetVisualDescendants().OfType<TextBox>().Single().Text="测试问题描述";
+                    Click(exportDialog.GetVisualDescendants().OfType<Button>().Single(button=>ToolTip.GetTip(button)?.ToString()=="导出"));await Task.Delay(150);
+                    Check(problemDescription=="测试问题描述"&&desktop.Windows.Count==1,"导出问题包对话框传递描述且关闭对话框");
                     typeof(MainWindow).GetMethod("Load", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [a.RecordingPath]);
                     await Task.Delay(200);
-                    Check(Field<Session>("_session").IsReplay && Field<WireEvent[]>("_snapshot").Single().name == "Alpha-recorded" && !Field<Button>("_record").IsEnabled,
+                    Check(Field<Session>("_session").IsReplay && Field<WireEvent[]>("_snapshot").Any(e => e.name == "Alpha-recorded") && !Field<Button>("_record").IsEnabled,
                         "真实录制重新打开且回放禁止重复录制");
+                    var followClient=Guid.NewGuid().ToString("N");
+                    var oldCapture=Meta(followClient,"sdk","old"); sessions[oldCapture.Id]=oldCapture;
+                    Select(oldCapture); window.ApplyUiAction("range","0:5"); Connected(oldCapture,false);
+                    var newNative=Meta(followClient,"native","new"); var newSdk=Meta(followClient,"sdk","new");
+                    sessions[newNative.Id]=newNative; sessions[newSdk.Id]=newSdk; await Task.Delay(650);
+                    Check(ReferenceEquals(Field<Session>("_session"),oldCapture), "浏览历史时新采集接入不自动跳段");
+                    window.ApplyUiAction("live","true");
+                    Check(ReferenceEquals(Field<Session>("_session"),newSdk) && State().GetProperty("live").GetBoolean(), "Live 跟随重连的新 CaptureId 并优先同通道");
+                    Connected(newSdk,false); Connected(newNative,false);
+                    var newestNative=Meta(followClient,"native","newest"); sessions[newestNative.Id]=newestNative; await Task.Delay(650);
+                    Check(ReferenceEquals(Field<Session>("_session"),newestNative), "新采集没有同通道时 Live 选择可用通道");
+                    var spatialSession=Meta(Guid.NewGuid().ToString("N"),"native","spatial"); sessions[spatialSession.Id]=spatialSession;
+                    spatialSession.Accept(new WireEvent {session=spatialSession.Id,seq=1,kind="position",entity="distance-listener",objectId="listener",name="衰减监听点",time=1,x=0,z=3});
+                    spatialSession.Accept(new WireEvent {session=spatialSession.Id,seq=2,kind="position",entity="source",objectId="source1",name="测试音源 A",time=1,x=0,z=3});
+                    spatialSession.Accept(new WireEvent {session=spatialSession.Id,seq=3,kind="position",entity="source",objectId="source2",name="测试音源 B",time=1,x=0,z=3});
+                    Select(spatialSession); window.ApplyUiAction("workspace", "空间");
+                    var spatialTimeline=Field<TimelineControl>("_timeline");
+                    await Task.Delay(100);
+                    var spatialPng=window.CapturePng("workspace");
+                    var pointHits=(List<(Rect rect,WireEvent item)>)typeof(TimelineControl).GetField("_hits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(spatialTimeline)!;
+                    var expansionHits=(List<(Rect rect,string key)>)typeof(TimelineControl).GetField("_expandHits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(spatialTimeline)!;
+                    var listenerHit=pointHits.Single(h=>h.item.entity=="distance-listener");
+                    var sourceHit=expansionHits.Single(h=>h.key.StartsWith("spatial:"));
+                    Check(!listenerHit.rect.Intersects(sourceHit.rect) && listenerHit.rect.Height==46 && sourceHit.rect.Height==46, "同坐标监听点与音源堆叠标注及点击区不重叠");
+                    Check(spatialTimeline.Events.All(e=>e.x==0&&e.z==3), "空间标注错位不改变真实坐标");
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/spatial-same-point.png"),spatialPng);
                     var carry = CreateSession(1003, "Long BGM"); sessions[carry.Id] = carry;
                     carry.Accept(new WireEvent { kind = "aisac", source = "cri-native", session = carry.Id, seq = 2, time = 2, name = "Distance", objectId = "player", entity = "player", value = .25 });
                     carry.Accept(new WireEvent { kind = "metric", source = "cri-native", session = carry.Id, seq = 3, time = 200, name = "CPU", value = 1 });

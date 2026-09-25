@@ -3,7 +3,7 @@ using CriScope.Unity;
 
 // Structural Release compilation test, not a substitute for a Unity Player build.
 var type = typeof(CriScopeDiagnostics);
-if (type.Assembly.GetType("CriScope.Unity.CriScopeBridge") != null || type.Assembly.GetType("CriScope.Unity.CriScopeMonitor") != null)
+if (type.Assembly.GetType("CriScope.Unity.CriScopeBridge") != null || type.Assembly.GetType("CriScope.Unity.CriScopeMonitor") != null || type.Assembly.GetType("CriScope.Unity.CriScopeNativeRelay") != null)
     throw new Exception("Release includes diagnostics transport/private native adapter");
 var declared = BindingFlags.DeclaredOnly | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
 if (type.GetFields(declared).Length != 0 || type.GetMethods(declared).Any(m => m.Name is "Update" or "Sample" or "Beat" or "Sequence" or "Close"))

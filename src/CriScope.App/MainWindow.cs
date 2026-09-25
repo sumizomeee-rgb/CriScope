@@ -25,6 +25,7 @@ public sealed class MainWindow : Window
     private Palette _p = new(false);
     private readonly DispatcherTimer _timer;
     private readonly Dictionary<Session, ViewState> _views = [];
+    private readonly Dictionary<Session, long> _sessionOrder = [];
     private Session? _session;
     private TimelineControl _timeline = null!;
     private StackPanel _sessions = null!;
@@ -46,9 +47,14 @@ public sealed class MainWindow : Window
     private bool _playing;
     private bool _autoRecorded;
     private bool _diagnostics;
-    private TextBox _address = null!;
+    private TextBlock _serverStatus = null!, _savedNotice = null!;
+    private StackPanel _savedPanel = null!;
+    private string? _lastSavedPath;
+    private string[] _savedPaths = [];
+    private readonly HashSet<(string Client, string Capture)> _recordingGroups = [];
+    public Func<Session, Task<string>>? ExportProblemAsync { get; set; }
     private Grid _main = null!;
-    private string _nativeAddress = "127.0.0.1:2002";
+
     private sealed class ViewState
     {
         public string Filter = "";
@@ -62,6 +68,11 @@ public sealed class MainWindow : Window
     {
         _collector = collector;
         Title = "CriScope · Audio observatory";
+        ExtendClientAreaToDecorationsHint = true;
+        WindowDecorations = WindowDecorations.BorderOnly;
+        ExtendClientAreaTitleBarHeightHint = 36;
+        CanResize = true;
+        ShowInTaskbar = true;
         Icon = new WindowIcon(Avalonia.Platform.AssetLoader.Open(new Uri("avares://CriScope/Assets/criscope.ico")));
         Width = 1480; Height = 900; MinWidth = 980; MinHeight = 650;
         FontFamily = new FontFamily("Segoe UI, Microsoft YaHei UI");
@@ -122,8 +133,8 @@ public sealed class MainWindow : Window
     private Control ButtonContent(string text, bool accent = false)
     {
         var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-        var path = text.Contains("录制") ? "M8,8 H16 V16 H8 Z" : text.Contains("打开") ? "M3,7 H10 L12,9 H21 L18,19 H3 Z M3,7 V5 H10 L12,7" :
-            text.Contains("播放") ? "M7,4 L20,12 L7,20 Z" : text.Contains("控制") ? "M5,3 V21 M12,3 V21 M19,3 V21 M2,8 H8 M9,16 H15 M16,6 H22" :
+        var path = text.Contains("导出") ? "M12,16 V3 M7,8 L12,3 L17,8 M4,14 V21 H20 V14" : text.Contains("开始记录") ? "M12,4 A8,8 0 1 0 12,20 A8,8 0 1 0 12,4" : (text.Contains("记录") || text.Contains("保存")) ? "M8,8 H16 V16 H8 Z" : text.Contains("打开") ? "M3,7 H10 L12,9 H21 L18,19 H3 Z M3,7 V5 H10 L12,7" :
+            (text.Contains("播放") || text.Contains("声音")) ? "M7,4 L20,12 L7,20 Z" : text.Contains("控制") ? "M5,3 V21 M12,3 V21 M19,3 V21 M2,8 H8 M9,16 H15 M16,6 H22" :
             text.Contains("混音") ? "M4,9 V18 M9,4 V20 M14,7 V17 M19,2 V22" : text.Contains("空间") ? "M12,3 L21,8 V17 L12,22 L3,17 V8 Z M3,8 L12,13 L21,8 M12,13 V22" :
             text.Contains("资源") ? "M4,4 H20 V9 H4 Z M4,14 H20 V19 H4 Z" : text.Contains("连接") ? "M8,5 L4,9 V15 L8,19 M16,5 L20,9 V15 L16,19 M8,12 H16" :
             text.Contains("诊断") ? "M4,3 H20 V21 H4 Z M8,8 H16 M8,12 H16 M8,16 H13" : text.Contains("断开") ? "M5,5 L19,19 M19,5 L5,19" :
@@ -140,45 +151,43 @@ public sealed class MainWindow : Window
         _rebuilding = true;
         RequestedThemeVariant = _p.Light ? ThemeVariant.Light : ThemeVariant.Dark;
         Background = _p.Canvas;
-        var root = new Grid { RowDefinitions = new RowDefinitions("58,*,29") };
+        var root = new Grid { RowDefinitions = new RowDefinitions("36,58,*,Auto") };
+        root.Children.Add(new WindowTitleBar(this, _p));
         var top = new Grid { ColumnDefinitions = new ColumnDefinitions("208,*,Auto"), Margin = new Thickness(16, 0) };
         var brand = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 9, VerticalAlignment = VerticalAlignment.Center };
-        brand.Children.Add(new Avalonia.Controls.Shapes.Path { Data = Geometry.Parse("M2,16 V8 M8,22 V2 M14,18 V6 M20,14 V10"), Stroke = _p.Voice, StrokeThickness = 3, Width = 24, Height = 29, Stretch = Stretch.Uniform });
-        brand.Children.Add(Label("CriScope", 23));
+        brand.Children.Add(Label("采集与日志", 17));
         top.Children.Add(brand);
         var identity = new StackPanel { Spacing = 3, VerticalAlignment = VerticalAlignment.Center };
         _identity = Label("音频观测台", 13);
         _states = Label("未连接  ·  录制空闲  ·  Live 跟随", 11, _p.Muted);
         identity.Children.Add(_identity); identity.Children.Add(_states); Grid.SetColumn(identity, 1); top.Children.Add(identity);
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
-        _record = Action("录制", Record);
+        _record = Action("开始记录日志", Record);
         actions.Children.Add(_record);
-        actions.Children.Add(Action("打开录制", async () =>
+        actions.Children.Add(Action("打开日志", async () =>
         {
             try
             {
                 var folder = await StorageProvider.TryGetFolderFromPathAsync(_collector.RecordingsDirectory);
-                var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = "打开 CriScope 录制", AllowMultiple = false, SuggestedStartLocation = folder,
-                    FileTypeFilter = new[] { new FilePickerFileType("CriScope 录制") { Patterns = new[] { "*.criscope", "*.jsonl" } }, FilePickerFileTypes.All } });
+                var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = "打开 CriScope 日志", AllowMultiple = false, SuggestedStartLocation = folder,
+                    FileTypeFilter = new[] { new FilePickerFileType("CriScope 日志") { Patterns = new[] { "*.criscope", "*.jsonl" } }, FilePickerFileTypes.All } });
                 if (files.Count > 0 && files[0].TryGetLocalPath() is { } path) Load(path);
             }
             catch (Exception ex) { _error = ex.Message; }
         }));
+        actions.Children.Add(Action("导出问题包", async () => await ExportProblem()));
         actions.Children.Add(Action(_p.Light ? "暗色" : "浅色", () => { SaveView(); _p = new Palette(!_p.Light); Build(); RestoreView(); Refresh(); }));
-        Grid.SetColumn(actions, 2); top.Children.Add(actions); root.Children.Add(Surface(top, _p.Shell));
+        Grid.SetColumn(actions, 2); top.Children.Add(actions); var topSurface = Surface(top, _p.Shell); Grid.SetRow(topSurface, 1); root.Children.Add(topSurface);
 
         _body = new Grid { ColumnDefinitions = new ColumnDefinitions("208,*,282") };
         var side = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto") };
         var sideHeading = new StackPanel { Margin = new Thickness(18, 23, 12, 18), Spacing = 6 };
         sideHeading.Children.Add(Label("会话 / SESSIONS", 11, _p.Muted));
         sideHeading.Children.Add(Label("客户端与录制", 17));
-        _address = new TextBox { Text = _nativeAddress, PlaceholderText = "主机:端口", FontSize = 12, Margin = new Thickness(0,8,0,0) };
-        _address.TextChanged += (_, _) => _nativeAddress = _address.Text ?? "";
-        sideHeading.Children.Add(_address);
-        var connectionActions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5 };
-        connectionActions.Children.Add(Action("连接", async () => await Connect()));
-        connectionActions.Children.Add(Action("断开", () => { if (_session != null) _collector.DisconnectNative(_session); Refresh(); }));
-        sideHeading.Children.Add(connectionActions); side.Children.Add(sideHeading);
+        _serverStatus = new TextBlock { Text = "等待游戏接入 · 端口 18961", TextWrapping = TextWrapping.Wrap, Foreground = _p.Good, FontSize = 11, Margin = new Thickness(0,8,0,0) };
+        sideHeading.Children.Add(_serverStatus);
+        sideHeading.Children.Add(new TextBlock { Text = "同机多实例可能受 CRI 原生端口限制", FontSize = 10, Foreground = _p.Muted, TextWrapping = TextWrapping.Wrap });
+        side.Children.Add(sideHeading);
         _sessions = new StackPanel { Spacing = 3 };
         var scroll = new ScrollViewer { Content = _sessions, HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled };
         Grid.SetRow(scroll, 1); side.Children.Add(scroll);
@@ -190,14 +199,18 @@ public sealed class MainWindow : Window
 
         var main = _main = new Grid { RowDefinitions = new RowDefinitions(_diagnostics ? "49,48,*,32,200" : "49,48,*,32,0") };
         var nav = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5, Margin = new Thickness(14, 8) };
-        foreach (var (id, title) in new[] { ("Timeline", "播放"), ("AISAC", "控制"), ("Mixing", "混音"), ("Location", "空间"), ("Performance", "资源") })
+        foreach (var (id, title) in new[] { ("Timeline", "声音时间线"), ("AISAC", "控制"), ("Mixing", "混音"), ("Location", "空间"), ("Performance", "资源") })
         {
             var mode = id;
             nav.Children.Add(Action(title, () => { _mode = mode; SaveView(); Build(); RestoreView(); Refresh(); }, _mode == id));
         }
-        nav.Children.Add(Action("诊断", () => { _diagnostics = !_diagnostics; _main.RowDefinitions[4].Height = new GridLength(_diagnostics ? 200 : 0); UpdateEvents(); }, _diagnostics));
-        nav.Children.Add(Action("详情", () => { _showInspector = !_showInspector; Responsive(); }));
-        main.Children.Add(Surface(nav, _p.Canvas));
+        var workspaceBar = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        workspaceBar.Children.Add(nav);
+        var drawers = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(6,8,14,8) };
+        drawers.Children.Add(Action("诊断", () => ApplyUiAction("diagnostics", "toggle")));
+        drawers.Children.Add(Action("详情", () => { _showInspector = !_showInspector; Responsive(); }));
+        Grid.SetColumn(drawers,1); workspaceBar.Children.Add(drawers);
+        main.Children.Add(Surface(workspaceBar, _p.Canvas));
         var toolbar = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), Margin = new Thickness(16, 7) };
         _filter = new TextBox { PlaceholderText = "筛选名称、对象、类型或内容…", FontSize = 12, Background = _p.Panel, BorderBrush = _p.Border, MinWidth = 120 };
         _filter.TextChanged += (_, _) => { if (!_rebuilding) UpdateEvents(); };
@@ -220,9 +233,20 @@ public sealed class MainWindow : Window
         _details = new StackPanel { Spacing = 12, Margin = new Thickness(20, 23) };
         _inspector = Surface(new ScrollViewer { Content = _details, HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled }, _p.Panel);
         Grid.SetColumn(_inspector, 2); _body.Children.Add(_inspector);
-        Grid.SetRow(_body, 1); root.Children.Add(_body);
+        Grid.SetRow(_body, 2); root.Children.Add(_body);
         _status = Label("正在启动接收器…", 11, _p.Muted); _status.Margin = new Thickness(15, 0);
-        var status = Surface(_status, _p.Shell); Grid.SetRow(status, 2); root.Children.Add(status);
+        var footer = new StackPanel();
+        _status.MinHeight = 29; footer.Children.Add(_status);
+        _savedPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Margin = new Thickness(15,0,15,6), IsVisible = false };
+        _savedNotice = Label("",11,_p.Good); _savedNotice.TextTrimming = TextTrimming.CharacterEllipsis; _savedNotice.MaxWidth = 940;
+        _savedPanel.Children.Add(_savedNotice);
+        _savedPanel.Children.Add(Action("打开文件夹", () =>
+        {
+            if (string.IsNullOrEmpty(_lastSavedPath)) return;
+            var folder = Path.GetDirectoryName(_lastSavedPath);
+            if (folder != null && Directory.Exists(folder)) System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = folder, UseShellExecute = true });
+        }));
+        footer.Children.Add(_savedPanel); var status = Surface(footer, _p.Shell); Grid.SetRow(status, 3); root.Children.Add(status);
         Content = root;
         _timeline.Events = _snapshot;
         _sessionSignature = "!"; _rebuilding = false;
@@ -264,19 +288,33 @@ public sealed class MainWindow : Window
         try { var session = _collector.LoadRecording(path); SelectSession(session); Fit(); _error = null; }
         catch (Exception ex) { _error = "打开失败：" + ex.Message; }
     }
-    private async Task Connect()
+    public string ProblemDescription { get; private set; } = "";
+    public (double Start, double End) CurrentTimeRange()
     {
-        try
-        {
-            var address = (_address.Text ?? "").Trim();
-            var split = address.LastIndexOf(':');
-            if (split < 1 || !int.TryParse(address[(split + 1)..], out var port) || port is < 1 or > 65535) throw new ArgumentException("请输入主机:端口，例如 127.0.0.1:2002");
-            _error = "正在连接 CRI Monitor…";
-            var session = await _collector.ConnectNativeAsync(address[..split].Trim('[', ']'), port);
-            _error = null; SelectSession(session);
-        }
-        catch (Exception ex) { _error = "连接失败：" + ex.Message; }
-        Refresh();
+        EnsureUiThread();
+        if (_timeline.SelectionStart is { } a && _timeline.SelectionEnd is { } b && Math.Abs(a-b) > .000001)
+            return (Math.Max(0, Math.Min(a,b)), Math.Max(0, Math.Max(a,b)));
+        return (Math.Max(0, _timeline.Start), Math.Max(0, _timeline.End));
+    }
+    private async Task ExportProblem()
+    {
+        if (_session == null || ExportProblemAsync == null) { _error = "请先选择会话；问题包导出服务尚未就绪"; return; }
+        var target = _session;
+        var dialog = new Window { Title = "导出问题包", Width = 540, Height = 310, CanResize = false, WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Background = _p.Panel, Icon = Icon };
+        var layout = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), Margin = new Thickness(20) };
+        layout.Children.Add(new TextBlock { Text = "描述遇到的问题（选填）", Foreground = _p.Text, FontSize = 16, Margin = new Thickness(0,0,0,14) });
+        var description = new TextBox { Name = "ProblemDescriptionInput", Text = ProblemDescription, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap,
+            PlaceholderText = "例如：音效突然停止；发生场景、预期表现与复现步骤…" };
+        Grid.SetRow(description,1); layout.Children.Add(description);
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Margin = new Thickness(0,14,0,0) };
+        actions.Children.Add(Action("取消",()=>dialog.Close(false)));
+        actions.Children.Add(Action("导出",()=>dialog.Close(true),true));
+        Grid.SetRow(actions,2);layout.Children.Add(actions);dialog.Content=layout;
+        if (!await dialog.ShowDialog<bool>(this)) return;
+        ProblemDescription = (description.Text ?? "").Trim();
+        try { _lastSavedPath = await ExportProblemAsync(target); _savedPaths = [_lastSavedPath]; _error = null; Refresh(); }
+        catch (Exception ex) { _error = "导出失败：" + ex.Message; }
     }
 
     public byte[] CapturePng(string? panel = null)
@@ -300,7 +338,7 @@ public sealed class MainWindow : Window
         return new { workspace = _mode, theme = _p.Light ? "light" : "dark", session = _session?.Id, live = _timeline.Live, filter = _filter.Text,
             selected = _selected?.seq, start = _timeline.Start, end = _timeline.End, span = _timeline.Span,
             selectionStart = _timeline.SelectionStart, selectionEnd = _timeline.SelectionEnd,
-            recording = _session?.Recording ?? false, connected = _session?.Connected ?? false,
+            recording = _session != null && RecordingTargets(_session).Any(s => s.Recording), connected = _session?.Connected ?? false,
             inspector = _showInspector, diagnostics = _diagnostics, width = Bounds.Width, height = Bounds.Height, dpi = 96 * RenderScaling,
             panels = new[] { "window", "workspace", "sessions", "inspector", "diagnostics" } };
     }
@@ -310,7 +348,7 @@ public sealed class MainWindow : Window
         switch (action.ToLowerInvariant())
         {
             case "workspace":
-                _mode = (value ?? "").ToLowerInvariant() switch { "播放" or "playback" or "timeline" => "Timeline", "控制" or "control" or "aisac" => "AISAC", "混音" or "mixing" => "Mixing", "空间" or "space" or "location" => "Location", "资源" or "resources" or "performance" => "Performance", _ => throw new ArgumentException("未知工作区") };
+                _mode = (value ?? "").ToLowerInvariant() switch { "播放" or "声音时间线" or "playback" or "timeline" => "Timeline", "控制" or "control" or "aisac" => "AISAC", "混音" or "mixing" => "Mixing", "空间" or "space" or "location" => "Location", "资源" or "resources" or "performance" => "Performance", _ => throw new ArgumentException("未知工作区") };
                 SaveView(); Build(); RestoreView(); break;
             case "live": _timeline.Live = !string.Equals(value, "false", StringComparison.OrdinalIgnoreCase) && value != "0"; _lastTotal = -1; break;
             case "theme":
@@ -334,13 +372,38 @@ public sealed class MainWindow : Window
     }
     private static void EnsureUiThread()
     { if (!Dispatcher.UIThread.CheckAccess()) throw new InvalidOperationException("UI 接口必须通过 Dispatcher.UIThread 调用"); }
-    private void Record()
+    private Session[] RecordingTargets(Session selected) => selected.IsReplay ? [] :
+        string.IsNullOrEmpty(selected.ClientId) || string.IsNullOrEmpty(selected.CaptureId) ? [selected] :
+        _collector.Sessions.Where(s => !s.IsReplay && s.ClientId == selected.ClientId && s.CaptureId == selected.CaptureId).ToArray();
+    private void StartRecordings(Session selected)
     {
-        if (_session == null) return;
+        var started = new List<Session>();
         try
         {
-            if (_session.Recording) _session.StopRecording(); else _session.StartRecording(_collector.RecordingsDirectory);
-            _error = null; Refresh();
+            foreach (var target in RecordingTargets(selected).Where(s => !s.Recording))
+            { target.StartRecording(_collector.RecordingsDirectory); started.Add(target); }
+            if (!string.IsNullOrEmpty(selected.ClientId) && !string.IsNullOrEmpty(selected.CaptureId))
+                _recordingGroups.Add((selected.ClientId, selected.CaptureId));
+        }
+        catch { foreach (var target in started) target.StopRecording(); throw; }
+    }
+    private void Record()
+    {
+        if (_session == null || _session.IsReplay) return;
+        try
+        {
+            var targets = RecordingTargets(_session);
+            if (targets.Any(s => s.Recording))
+            {
+                _recordingGroups.Remove((_session.ClientId, _session.CaptureId));
+                var recorded = targets.Where(s => s.Recording).ToArray();
+                foreach (var target in recorded) target.StopRecording();
+                _savedPaths = recorded.Select(s => s.RecordingPath).ToArray();
+                _lastSavedPath = _savedPaths.FirstOrDefault();
+                _error = recorded.FirstOrDefault(s => s.Error != null)?.Error;
+            }
+            else { StartRecordings(_session); _lastSavedPath = null; _savedPaths = []; _error = null; }
+            Refresh();
         }
         catch (Exception ex) { _error = "录制失败：" + ex.Message; }
     }
@@ -370,31 +433,78 @@ public sealed class MainWindow : Window
     private void Refresh()
     {
         var sessions = _collector.Sessions;
+        foreach (var seen in sessions) if (!_sessionOrder.ContainsKey(seen)) _sessionOrder[seen] = _sessionOrder.Count;
+        _serverStatus.Text = _collector.Status;
+        foreach (var group in _recordingGroups.ToArray())
+        {
+            var targets = sessions.Where(s => !s.IsReplay && s.ClientId == group.Client && s.CaptureId == group.Capture).ToArray();
+            if (targets.Any(s => s.Connected)) continue;
+            _recordingGroups.Remove(group);
+            var recorded = targets.Where(s => s.Recording).ToArray();
+            foreach (var target in recorded) target.StopRecording();
+            if (recorded.Length > 0)
+            {
+                _savedPaths = recorded.Select(s => s.RecordingPath).ToArray();
+                _lastSavedPath = _savedPaths[0];
+                _error = recorded.FirstOrDefault(s => s.Error != null)?.Error;
+            }
+        }
+        _savedPanel.IsVisible = !string.IsNullOrEmpty(_lastSavedPath);
+        _savedNotice.Text = string.IsNullOrEmpty(_lastSavedPath) ? "" : (_savedPaths.Length > 1 ? $"已保存 {_savedPaths.Length} 个通道日志：" : "已保存：") + _lastSavedPath;
+        ToolTip.SetTip(_savedNotice, string.Join("\n", _savedPaths));
+        foreach (var target in sessions.Where(s => !s.IsReplay && s.Connected && !s.Recording && _recordingGroups.Contains((s.ClientId, s.CaptureId))))
+        {
+            try { target.StartRecording(_collector.RecordingsDirectory); }
+            catch (Exception ex) { _recordingGroups.Remove((target.ClientId, target.CaptureId)); _error = "补充通道录制失败：" + ex.Message; }
+        }
         if (!_autoRecorded && Environment.GetCommandLineArgs().Contains("--record") && sessions.FirstOrDefault(s => !s.IsReplay && s.Connected) is { } recordTarget)
         {
             _autoRecorded = true;
-            try { recordTarget.StartRecording(_collector.RecordingsDirectory); }
+            try { StartRecordings(recordTarget); }
             catch (Exception ex) { _error = "自动录制失败：" + ex.Message; }
         }
-        if (_session == null && sessions.Length == 1) { SelectSession(sessions[0]); return; }
+        if (_session is { IsReplay: false, Connected: false } previous && _timeline.Live && !string.IsNullOrEmpty(previous.ClientId))
+        {
+            var replacement = sessions.Where(s => !s.IsReplay && s.Connected && s.ClientId == previous.ClientId && s.CaptureId != previous.CaptureId)
+                .OrderByDescending(s => ClientCardPresentation.Channel(s) == ClientCardPresentation.Channel(previous))
+                .ThenByDescending(s => _sessionOrder[s]).FirstOrDefault();
+            if (replacement != null)
+            {
+                if (_views.TryGetValue(replacement, out var replacementView)) replacementView.Live = true;
+                SelectSession(replacement); return;
+            }
+        }
+        if (_session == null && sessions.Length > 0 && ClientCardPresentation.Group(sessions).Length == 1) { SelectSession(ClientCardPresentation.Default(sessions)); return; }
         var signature = string.Join("|", sessions.Select(s => $"{s.Id}/{s.IsReplay}/{s.Connected}/{s.Capturing}/{s.Recording}/{s.Name}")) + _session?.GetHashCode();
         if (signature != _sessionSignature)
         {
             _sessionSignature = signature; _sessions.Children.Clear();
             if (sessions.Length == 0)
             {
-                _sessions.Children.Add(new TextBlock { Text = "连接音频来源\n\n输入 CRI Monitor 地址\n点击连接开始观测\n\n目标需已启用 Monitor /\nIn-Game Preview", TextWrapping = TextWrapping.Wrap, Foreground = _p.Muted, Margin = new Thickness(18), FontSize = 12, LineHeight = 23 });
+                _sessions.Children.Add(new TextBlock { Text = "等待游戏接入\n\n在游戏中填写运行 CriScope\n的电脑 IP，再开启采集。\n同机默认 127.0.0.1。\n\n同一游戏的原生与扩展\n通道会显示在同一张卡片。", TextWrapping = TextWrapping.Wrap, Foreground = _p.Muted, Margin = new Thickness(18), FontSize = 12, LineHeight = 23 });
             }
-            foreach (var session in sessions)
+            foreach (var group in ClientCardPresentation.Group(sessions.OrderBy(s => _sessionOrder[s])))
             {
-                var lines = new StackPanel { Spacing = 6 };
-                lines.Children.Add(Label(session.Name, 13, ReferenceEquals(session, _session) ? _p.Selection : _p.Text));
-                lines.Children.Add(Label($"{session.Platform}  /  PID {session.Pid}", 10, _p.Muted));
-                lines.Children.Add(Label($"{(session.IsReplay ? "历史录制" : session.Connected ? "已连接" : "已断线")}  ·  {(session.Recording ? "● REC" : session.Capturing ? "采集中" : "采集关闭")}", 10, session.Recording ? _p.Error : _p.Muted));
-                var button = Action("", () => SelectSession(session)); button.Content = lines; button.HorizontalAlignment = HorizontalAlignment.Stretch;
-                button.HorizontalContentAlignment = HorizontalAlignment.Left; button.Margin = new Thickness(8, 1); button.Padding = new Thickness(10, 13);
-                button.BorderBrush = ReferenceEquals(session, _session) ? _p.Selection : Brushes.Transparent;
-                button.Background = ReferenceEquals(session, _session) ? _p.Alternate : Brushes.Transparent; _sessions.Children.Add(button);
+                var preferred = ClientCardPresentation.Default(group);
+                bool selected = _session != null && group.Contains(_session);
+                var card = new StackPanel { Spacing = 6, Margin = new Thickness(8,3) };
+                var lines = new StackPanel { Spacing = 5 };
+                lines.Children.Add(Label(preferred.Name,13,selected?_p.Selection:_p.Text));
+                lines.Children.Add(Label($"{preferred.Machine} · {preferred.Platform}",10));
+                lines.Children.Add(Label($"PID {preferred.Pid}"+(preferred.IsReplay?" · 日志回放":""),10));
+                var heading = Action("",()=>SelectSession(preferred)); heading.Content=lines;
+                heading.HorizontalAlignment=HorizontalAlignment.Stretch;heading.HorizontalContentAlignment=HorizontalAlignment.Left;
+                heading.BorderBrush=selected?_p.Selection:_p.Border;card.Children.Add(heading);
+                foreach(var channel in group.GroupBy(ClientCardPresentation.Channel))
+                {
+                    var current=channel.OrderByDescending(s=>s.Connected).ThenByDescending(s=>_sessionOrder[s]).First();
+                    var name=channel.Key=="native"?"原生":"SDK 扩展";
+                    var control=Action("",()=>SelectSession(current));
+                    control.Content=Label(name+" · "+(current.Recording?"记录中":current.Connected?"已接入":"已断开"),10,ReferenceEquals(current,_session)?_p.Selection:_p.Muted);
+                    control.Padding=new Thickness(8,5);control.HorizontalAlignment=HorizontalAlignment.Stretch;
+                    ToolTip.SetTip(control,current.ConnectionStatus+"\n"+current.Source);card.Children.Add(control);
+                }
+                _sessions.Children.Add(card);
             }
         }
         _record.IsEnabled = _session != null && !_session.IsReplay;
@@ -402,16 +512,18 @@ public sealed class MainWindow : Window
         {
             _identity.Text = $"{s.Name}  /  {s.Platform}  /  PID {s.Pid}";
             var replay = s.IsReplay;
-            _states.Text = $"{(replay ? "历史录制" : s.ConnectionStatus)}  ·  {(s.Recording ? "● 诊断录制中" : "录制空闲")}  ·  {(replay ? _playing ? "回放播放" : "回放暂停" : _timeline.Live ? "Live 跟随" : "浏览历史 · 采集仍继续")}";
+            var recordingTargets = RecordingTargets(s);
+            var recordingCount = recordingTargets.Count(target => target.Recording);
+            _states.Text = $"{(replay ? "历史录制" : s.ConnectionStatus)}  ·  {(recordingCount > 0 ? $"● {recordingCount} 通道记录中" : "录制空闲")}  ·  {(replay ? _playing ? "回放播放" : "回放暂停" : _timeline.Live ? "Live 跟随" : "浏览历史 · 采集仍继续")}";
             _states.TextTrimming = TextTrimming.CharacterEllipsis; ToolTip.SetTip(_states, _states.Text);
-            _record.Content = ButtonContent(s.Recording ? "停止录制" : "录制");
-            ToolTip.SetTip(_record, string.IsNullOrEmpty(s.RecordingPath) ? "仅录制所选会话；从按下时开始，不回写此前缓存" : s.RecordingPath);
+            _record.Content = ButtonContent(recordingCount > 0 ? "停止并保存" : "开始记录日志");
+            ToolTip.SetTip(_record, $"记录本次采集的全部已接入通道（当前 {recordingTargets.Length} 个），各自保存独立日志；包含当前已知状态与后续事件，原始观测时间保留");
             if (_lastTotal != s.Total)
             {
                 _lastTotal = s.Total; _snapshot = s.ViewSnapshot(); _timeline.Events = _snapshot; UpdateEvents();
             }
             if (_timeline.Live && _snapshot.Length > 0) _timeline.End = _snapshot.Max(e => e.time);
-            _timeline.SupplementMetrics = s.Pid > 0 && !s.IsReplay ? sessions.Where(other => other != s && other.Pid == s.Pid && !other.IsReplay && other.Connected && other.Source.Contains("sdk", StringComparison.OrdinalIgnoreCase))
+            _timeline.SupplementMetrics = !string.IsNullOrEmpty(s.ClientId) && !s.IsReplay ? sessions.Where(other => other != s && other.ClientId == s.ClientId && other.CaptureId == s.CaptureId && !other.IsReplay && other.Connected && ClientCardPresentation.Channel(other) == "sdk")
                 .SelectMany(other => other.ViewSnapshot().Where(e => e.kind == "metric"))
                 .GroupBy(e => e.name).Select(g => g.Last()).ToArray() : [];
             if (s.IsReplay && _playing && _snapshot.Length > 0)
@@ -481,7 +593,7 @@ public sealed class MainWindow : Window
             _details.Children.Add(new SelectableTextBlock { Text = string.IsNullOrEmpty(value) ? "未提供" : value, Foreground = _p.Text, FontSize = 12, TextWrapping = TextWrapping.Wrap });
         }
         Field("来源", e.source);
-        if (e.kind == "aisac") Field("AISAC 语义", "最后观测到的写入；不是读取当前全部控制值");
+        if (e.kind == "aisac") Field("AISAC 语义", "最近收到的控制值；更新时间见上方，不代表连接前所有参数已恢复");
         Field("时间", TimelineControl.TimeLabel(e.time));
         if (!string.IsNullOrEmpty(e.parentId)) Field("关联对象", e.parentId);
         if (e.kind is "aisac" or "metric") Field("值", e.kind == "metric" ? MetricPresentation.Value(e) : e.value.ToString("G9"));

@@ -18,6 +18,7 @@ namespace CriScope.Unity
         private static string host = "127.0.0.1";
         private CriScopeBridge bridge;
         private CriScopeMonitor monitor;
+        private string monitorNote;
         private bool subscribed, closing;
         private float nextSample;
         private readonly Dictionary<uint, int> blocks = new Dictionary<uint, int>();
@@ -25,7 +26,7 @@ namespace CriScope.Unity
         private readonly List<uint> ended = new List<uint>();
         public static bool CaptureEnabled { get { return current != null && current.bridge != null; } }
         public static string Host { get { return host; } }
-        public static string Status { get { return current == null ? lastStatus : current.monitor.Status + " | SDK " + current.bridge.Status; } }
+        public static string Status { get { return current == null ? lastStatus : current.bridge.Status + (string.IsNullOrEmpty(current.monitorNote) ? "" : " | " + current.monitorNote); } }
 
         public static bool SetCaptureEnabled(bool enabled, string targetHost = "127.0.0.1")
         {
@@ -37,20 +38,25 @@ namespace CriScope.Unity
             if (!Application.isPlaying) { lastStatus = "Requires Play Mode"; return false; }
             string nextHost = string.IsNullOrEmpty(targetHost) ? "127.0.0.1" : targetHost.Trim();
             if (Uri.CheckHostName(nextHost) == UriHostNameType.Unknown) { lastStatus = "Invalid receiver hostname"; return false; }
-            if (CaptureEnabled && host == nextHost) return true;
+            // The active destination is immutable. Disable first, edit it, then enable.
+            if (CaptureEnabled) return host == nextHost;
             SetCaptureEnabled(false);
             CriScopeMonitor owner = new CriScopeMonitor();
             GameObject go = null;
             try
             {
-                owner.Start();
+                if (!CriAtomPlugin.IsLibraryInitialized()) throw new InvalidOperationException("Atom has not initialized");
+                string nativeNote = null;
+                try { owner.Start(); }
+                catch (Exception e) { nativeNote = "原生启动不可用: " + e.Message; }
                 go = new GameObject("CriScope SDK diagnostics");
                 DontDestroyOnLoad(go);
                 var component = go.AddComponent<CriScopeDiagnostics>();
                 current = component;
                 component.monitor = owner;
+                component.monitorNote = nativeNote;
                 host = nextHost;
-                component.bridge = new CriScopeBridge(host, "CRI SDK", Application.platform.ToString(), System.Diagnostics.Process.GetCurrentProcess().Id);
+                component.bridge = new CriScopeBridge(host, Application.isEditor ? "Unity Editor" : "Unity Player", Application.platform.ToString(), System.Diagnostics.Process.GetCurrentProcess().Id, nativeNote);
                 CriAtomExBeatSync.OnCallback += component.Beat;
                 CriAtomExSequencer.OnCallback += component.Sequence;
                 Application.logMessageReceived += component.Log;
@@ -142,11 +148,18 @@ namespace CriScope.Unity
                 Application.logMessageReceived -= Log;
                 subscribed = false;
             }
-            if (bridge != null) { bridge.Emit(new WireEvent { kind = "state", name = "SDK diagnostics disabled", value = 0 }); bridge.Dispose(); bridge = null; }
             bool owned = monitor != null && monitor.Owned;
-            if (monitor != null) monitor.Dispose();
-            lastStatus = owned ? "Disabled; owned Monitor stopped" : "Disabled; pre-existing Monitor preserved";
-            if (current == this) current = null;
+            try
+            {
+                if (bridge != null) { bridge.Emit(new WireEvent { kind = "state", name = "SDK diagnostics disabled", value = 0 }); bridge.Dispose(); }
+            }
+            finally
+            {
+                bridge = null;
+                if (monitor != null) monitor.Dispose();
+                lastStatus = owned ? "已关闭 · 本功能启动的 Monitor 已释放" : monitor != null && monitor.Status != null ? "已关闭 · 保留游戏原有 Monitor" : "已关闭";
+                if (current == this) current = null;
+            }
         }
 #else
         // No polling, transport, callback subscription, or native private adapter in production builds.

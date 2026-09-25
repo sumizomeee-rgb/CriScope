@@ -72,7 +72,7 @@ public sealed class QueryServer : IDisposable
             }
             else if (method == "GET" && path == "/sessions")
                 result = collector.Sessions.Select(s => new { id = s.Id, name = s.Name, pid = s.Pid, platform = s.Platform,
-                    source = s.Source, endpoint = s.Endpoint, status = s.ConnectionStatus, connected = s.Connected,
+                    source = s.Source, clientId = s.ClientId, captureId = s.CaptureId, channel = s.Channel, machine = s.Machine, endpoint = s.Endpoint, status = s.ConnectionStatus, connected = s.Connected,
                     capturing = s.Capturing, recording = s.Recording, replay = s.IsReplay, total = s.Total,
                     dropped = s.Dropped, evicted = s.Evicted, viewStatesEvicted = s.ViewStatesEvicted, watermark = s.Watermark, lastTime = s.LastTime });
             else if (method == "GET" && path is "/events" or "/summary")

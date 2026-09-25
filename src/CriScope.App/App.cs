@@ -19,6 +19,13 @@ public sealed class App : Application
      }
      var window=new MainWindow(collector);
      desktop.MainWindow=window;
+     window.ExportProblemAsync=async session=> {
+       var range=window.CurrentTimeRange();
+       var image=window.CapturePng(null);
+       var description=window.ProblemDescription;
+       return await Task.Run(()=>ProblemBundle.Export(collector,session,collector.RecordingsDirectory,
+           range.Start,range.End,image,description));
+     };
      if(query!=null) {
        query.CaptureScreenshot=async panel=>await Dispatcher.UIThread.InvokeAsync(()=>window.CapturePng(panel));
        query.ReadUiState=async ()=>await Dispatcher.UIThread.InvokeAsync(()=>window.UiState());

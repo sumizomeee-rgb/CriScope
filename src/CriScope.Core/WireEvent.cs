@@ -4,6 +4,13 @@ namespace CriScope.Core;
 // 字段名与 Unity JsonUtility 协议保持一致。原始行保留用于证据和录制。
 public sealed class WireEvent
 {
+    public string clientId { get; set; } = "";
+    public string machine { get; set; } = "";
+    public string captureId { get; set; } = "";
+    public string channel { get; set; } = "";
+    public int epoch { get; set; }
+    public double observedTime { get; set; }
+    public bool baseline { get; set; }
     public string kind { get; set; } = "";
     public string source { get; set; } = "";
     public string parentId { get; set; } = "";

@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
- <PropertyGroup><OutputType>WinExe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><ApplicationManifest>app.manifest</ApplicationManifest><AssemblyName>CriScope</AssemblyName><ApplicationIcon>Assets/criscope.ico</ApplicationIcon><Version>0.2.0</Version></PropertyGroup>
+ <PropertyGroup><OutputType>WinExe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><ApplicationManifest>app.manifest</ApplicationManifest><AssemblyName>CriScope</AssemblyName><ApplicationIcon>Assets/criscope.ico</ApplicationIcon><Version>0.3.0</Version></PropertyGroup>
  <ItemGroup><AvaloniaResource Include="Assets/criscope.ico" /><AvaloniaResource Include="Assets/criscope.svg" /></ItemGroup>
  <ItemGroup><ProjectReference Include="../CriScope.Core/CriScope.Core.csproj"/><PackageReference Include="Avalonia" Version="12.1.3"/><PackageReference Include="Avalonia.Desktop" Version="12.1.3"/><PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.3"/></ItemGroup>
 </Project>
