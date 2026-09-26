@@ -260,6 +260,7 @@ public sealed class MainWindow : Window
         Content = root;
         _timeline.Events = _snapshot;
         _sessionSignature = "!"; _rebuilding = false;
+        _lastInspectorEnd = double.NaN;
         Inspector(); Responsive(); UpdateEvents();
     }
 
@@ -576,7 +577,7 @@ public sealed class MainWindow : Window
             _timeline.TimeOrigin=s.TimeOrigin;
             _timeline.SupplementMetrics=_supplementMetrics;
             if (_timeline.Live && _snapshot.Length > 0) _timeline.End = _snapshot.Max(e => e.time);
-            if (_showInspector && _selected!=null && Math.Abs(_timeline.End-_lastInspectorEnd)>.5) { _lastInspectorEnd=_timeline.End; Inspector(); }
+            if (_showInspector && _selected!=null && (double.IsNaN(_lastInspectorEnd) || Math.Abs(_timeline.End-_lastInspectorEnd)>.5)) { _lastInspectorEnd=_timeline.End; Inspector(); }
             if (s.IsReplay && _playing && _snapshot.Length > 0)
             {
                 _timeline.End += .3;
@@ -647,7 +648,14 @@ public sealed class MainWindow : Window
             _details.Children.Add(new TextBlock { Text = "• 实际 Voice 与 Cue 请求分开\n• AISAC 显示最后观测到的写入\n• 热接入不补造此前的历史\n• 缺失数据保持未提供\n• SDK 补充使用独立时钟", FontSize = 12, Foreground = _p.Muted, LineHeight = 25, TextWrapping = TextWrapping.Wrap });
             return;
         }
-        _details.Children.Add(Label(e.kind.ToUpperInvariant(), 25, _p.Signal));
+        _details.Children.Add(Label(e.kind switch
+        {
+            "request" => "播放实例", "play" => "Voice 分配", "stop" => "停止记录",
+            "aisac" => "AISAC 设置", "selector" => "Selector 设置", "block" => "Block 事件",
+            "beat" => "节拍事件", "sequence" => "序列事件", "position" => "空间位置",
+            "metric" => "资源指标", "cue-info" => "Cue 信息", "gap" => "数据缺口",
+            _ => "诊断记录"
+        }, 25, _p.Signal));
         _details.Children.Add(new TextBlock { Text = e.name, FontSize = 17, Foreground = _p.Text, TextWrapping = TextWrapping.Wrap });
         void Field(string label, string value)
         {
@@ -657,7 +665,7 @@ public sealed class MainWindow : Window
         var eventSession=_collector.Sessions.FirstOrDefault(s=>s.Id==e.session)??_session;
         bool independentClock=eventSession!=_session&&!e.estimatedTime;
         var clockSession=independentClock?eventSession:_session;
-        Field("事件发生于", "+" + TimelineControl.TimeLabel(e.time-(clockSession?.TimeOrigin??0)) + (e.estimatedTime?"（SDK 约时）":independentClock?"（SDK 独立时间）":""));
+        Field(PlaybackPresentation.IsUnknownStart(e) ? "首次观测于" : "事件发生于", "+" + TimelineControl.TimeLabel(e.time-(clockSession?.TimeOrigin??0)) + (e.estimatedTime?"（SDK 约时）":independentClock?"（SDK 独立时间）":""));
         Field("钟表时间", clockSession?.FormatWallTime(e) ?? "未提供");
         var playbackId=e.entity=="cue"?e.objectId:e.parentId;
         var groups=PlaybackPresentation.Group(_snapshot,_timeline.End);

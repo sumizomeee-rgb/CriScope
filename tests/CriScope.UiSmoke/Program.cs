@@ -280,6 +280,19 @@ public sealed class SmokeApp : Application
                     Check(Field<TimelineControl>("_timeline").TimeOrigin==100&&Field<TimelineControl>("_timeline").SupplementMetrics.Any(e=>e.name=="memory.atom.bytes"),"无新数据切页保留时间起点和SDK内存指标");
                     typeof(MainWindow).GetMethod("SelectEvent",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,[sdkMemory]);
                     Check(Field<StackPanel>("_details").GetVisualDescendants().OfType<TextBlock>().Any(x=>x.Text?.Contains("SDK 独立时钟")==true)&&!Field<StackPanel>("_details").GetVisualDescendants().OfType<Button>().Any(x=>ToolTip.GetTip(x)?.ToString()=="跳至此事件时间"),"SDK指标独立时间不误跳原生时间轴");
+                    var inspectSession=Meta(Guid.NewGuid().ToString("N"),"native","inspect");sessions[inspectSession.Id]=inspectSession;
+                    var inspectRequest=new WireEvent {session=inspectSession.Id,seq=1,kind="request",entity="cue",objectId="inspect-pb",name="Silent Cue",time=200};
+                    inspectSession.Accept(inspectRequest);
+                    inspectSession.Accept(new WireEvent {session=inspectSession.Id,seq=2,kind="play",entity="voice",objectId="inspect-v",parentId="inspect-pb",time=200.02});
+                    inspectSession.Accept(new WireEvent {session=inspectSession.Id,seq=3,kind="stop",entity="voice",objectId="inspect-v",parentId="inspect-pb",time=200.5});
+                    Select(inspectSession);window.ApplyUiAction("range","199:205");
+                    typeof(MainWindow).GetMethod("SelectEvent",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,[inspectRequest]);
+                    window.ApplyUiAction("workspace","控制");
+                    Check(Field<StackPanel>("_details").GetVisualDescendants().OfType<TextBlock>().Any(x=>x.Text=="播放历时"),"暂停历史切页后详情仍使用恢复的时间范围，保留播放起止");
+                    window.ApplyUiAction("live","true");
+                    inspectSession.Accept(new WireEvent {session=inspectSession.Id,seq=4,kind="metric",time=210,name="CPU",value=1});
+                    await Task.Delay(400);
+                    Check((double)typeof(MainWindow).GetField("_lastInspectorEnd",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(window)!>=210,"首次选择后详情会随最新观测刷新");
                     Console.WriteLine($"结果：{passed}/{passed} UI 检查通过"); desktop.Shutdown(0);
                 }
                 catch (Exception ex) { Console.Error.WriteLine($"FAIL：已通过 {passed} 项；{ex}"); desktop.Shutdown(1); }
