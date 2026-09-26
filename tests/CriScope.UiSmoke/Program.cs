@@ -96,6 +96,27 @@ public sealed class SmokeApp : Application
                     window.ApplyUiAction("live", "true"); window.ApplyUiAction("select", "1");
                     Check(State().GetProperty("live").GetBoolean() && State().GetProperty("selected").GetInt64() == 1,
                         "选择事件不退出实时且不跳到起点");
+                    window.ApplyUiAction("range", "0:9999"); window.ApplyUiAction("live", "true");
+                    Check(State().GetProperty("span").GetDouble()==30 && State().GetProperty("live").GetBoolean(),"返回实时恢复30秒，不沿用巨大历史范围");
+                    window.ApplyUiAction("control-kind","selector:false");
+                    window.ApplyUiAction("spatial-layer","sources:false");
+                    window.ApplyUiAction("workspace","控制"); window.ApplyUiAction("workspace","空间");
+                    Check(!Field<TimelineControl>("_timeline").ControlKinds.Contains("selector")&&!Field<TimelineControl>("_timeline").ShowSources,"控制快捷筛选与空间图层跨工作区保留");
+                    window.ApplyUiAction("control-kind","selector:true"); window.ApplyUiAction("spatial-layer","sources:true");
+                    Check(TimelineControl.TimeLabel(3661.25)=="01:01:01.250","长时采集使用时分秒而不是累计分钟");
+                    var projectionNative=new[]{new WireEvent {kind="request",entity="cue",objectId="pb",time=100,observedTime=10,raw="{\"parameters\":[{\"name\":\"CriAtomExPlaybackId\",\"value\":12}]}"},new WireEvent {kind="metric",time=101,observedTime=11}};
+                    var sdkBeat=new WireEvent {kind="beat",objectId="playback:12",time=10.5,observedTime=10.5,seq=7};
+                    var projected=ClientTimelineProjection.Combine(projectionNative,[sdkBeat]).Single(e=>e.kind=="beat");
+                    Check(projected.parentId=="pb"&&projected.time==100.5&&projected.originalTime==10.5&&projected.estimatedTime&&sdkBeat.time==10.5,"SDK事件按对应实例与时钟锚点投影，原始数据不变");
+                    var noMetadata=ClientTimelineProjection.Combine(projectionNative,[new WireEvent {kind="beat",objectId="playback:99",time=10.5}]).Single(e=>e.kind=="beat");
+                    Check(noMetadata.parentId==""&&noMetadata.detail.Contains("未关联"),"缺少实例关联不凭Cue名猜测");
+                    Check(ClientCardPresentation.Address(new Session(new WireEvent {session="ip",detail="127.0.0.1:7362"}))=="127.0.0.1","客户端卡片显示IP而非临时端口或用户名");
+                    Check(Field<TimelineControl>("_timeline").TimeOrigin==a.TimeOrigin,"静态会话切工作区仍保留固定时间起点");
+                    var wrongCue=ClientTimelineProjection.Combine(projectionNative,[new WireEvent {kind="cue-info",name="different",objectId="playback:12",time=10.5}]).Single(e=>e.kind=="cue-info");
+                    Check(wrongCue.parentId=="","Cue标注时长必须同时匹配实例和Cue名称");
+                    var oldAnchor=new WireEvent {kind="play",time=100,observedTime=10,detail="连接时已存在 Voice；起点未知"};
+                    Check(ClientTimelineProjection.Combine([oldAnchor],[sdkBeat]).All(e=>e.kind!="beat"),"热接入补发的未知起点不能用作SDK时钟锚点");
+                    Check(SpatialPresentation.Group(spatial,10,false,false,true).All(g=>g.Entity!="source")&&SpatialPresentation.Group(spatial,10,false,true,false).All(g=>g.Entity=="source"),"音源与衰减监听点可独立隐藏");
                     var end = State().GetProperty("end").GetDouble();
                     foreach (var workspace in new[] { "播放", "控制", "混音", "空间", "资源" })
                     {
@@ -207,7 +228,7 @@ public sealed class SmokeApp : Application
                     sessions[newNative.Id]=newNative; sessions[newSdk.Id]=newSdk; await Task.Delay(650);
                     Check(ReferenceEquals(Field<Session>("_session"),oldCapture), "浏览历史时新采集接入不自动跳段");
                     window.ApplyUiAction("live","true");
-                    Check(ReferenceEquals(Field<Session>("_session"),newSdk) && State().GetProperty("live").GetBoolean(), "Live 跟随重连的新 CaptureId 并优先同通道");
+                    Check(ReferenceEquals(Field<Session>("_session"),newNative) && State().GetProperty("live").GetBoolean(), "Live 跟随重连的新 CaptureId 并展示完整客户端");
                     Connected(newSdk,false); Connected(newNative,false);
                     var newestNative=Meta(followClient,"native","newest"); sessions[newestNative.Id]=newestNative; await Task.Delay(650);
                     Check(ReferenceEquals(Field<Session>("_session"),newestNative), "新采集没有同通道时 Live 选择可用通道");
@@ -249,6 +270,16 @@ public sealed class SmokeApp : Application
                         "120 秒历史逐出后 UI 保留真实时间的 BGM 和 AISAC 状态");
                     typeof(MainWindow).GetMethod("Fit", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
                     Check(State().GetProperty("span").GetDouble() < 10, "全览不被 carry 的旧时间拉宽");
+                    var clockClient=Guid.NewGuid().ToString("N");var clockNative=Meta(clockClient,"native","clock");var clockSdk=Meta(clockClient,"sdk","clock");
+                    sessions[clockNative.Id]=clockNative;sessions[clockSdk.Id]=clockSdk;
+                    clockNative.Accept(new WireEvent {session=clockNative.Id,seq=1,kind="metric",time=100,observedTime=10,name="CRI CPU",value=1});
+                    var sdkMemory=new WireEvent {session=clockSdk.Id,seq=1,kind="metric",source="cri-sdk",time=10,name="memory.atom.bytes",value=1048576};clockSdk.Accept(sdkMemory);
+                    Connected(clockNative,false);Select(clockSdk);Connected(clockNative,true);await Task.Delay(400);
+                    Check(ReferenceEquals(Field<Session>("_session"),clockNative),"SDK先接入后原生就绪自动切到同客户端完整视图");
+                    window.ApplyUiAction("workspace","资源");
+                    Check(Field<TimelineControl>("_timeline").TimeOrigin==100&&Field<TimelineControl>("_timeline").SupplementMetrics.Any(e=>e.name=="memory.atom.bytes"),"无新数据切页保留时间起点和SDK内存指标");
+                    typeof(MainWindow).GetMethod("SelectEvent",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,[sdkMemory]);
+                    Check(Field<StackPanel>("_details").GetVisualDescendants().OfType<TextBlock>().Any(x=>x.Text?.Contains("SDK 独立时钟")==true)&&!Field<StackPanel>("_details").GetVisualDescendants().OfType<Button>().Any(x=>ToolTip.GetTip(x)?.ToString()=="跳至此事件时间"),"SDK指标独立时间不误跳原生时间轴");
                     Console.WriteLine($"结果：{passed}/{passed} UI 检查通过"); desktop.Shutdown(0);
                 }
                 catch (Exception ex) { Console.Error.WriteLine($"FAIL：已通过 {passed} 项；{ex}"); desktop.Shutdown(1); }

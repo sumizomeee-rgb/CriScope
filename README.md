@@ -25,15 +25,24 @@ Live 内存每通道最多保留 120 秒或 120,000 条事件，另保留最多 
 | 空间 | 原生音源、Listener 及已知字段推导的衰减参考点；通过真实播放关联标注 Cue，不猜测 GameObject 名称或未知位置 |
 | 资源 | 原生 CPU、声部、流式使用量；可选 SDK Atom/FS 内存和流式声池容量 |
 
-原生与 SDK 使用各自的时钟，不把未经校准的时间轴混在一起。录制保留解析事件与原生参数，不声称是无损网络包抓取。缺失与断线会保留明确记录；未知值不当成零。
+原生与 SDK 保留各自时钟；同次采集的 SDK 回调按邻近桥观测锚点估算显示位置，并标注“SDK 约时”。只有原始 Playback ID 与时间区间唯一匹配时才关联实例。录制保留解析事件与原生参数，不声称是无损网络包抓取。缺失与断线会保留明确记录；未知值不当成零。
+
+## 查看播放与控制
+
+- 时间线按 Cue 播放实例组织，静音 Voice 正常显示；数量限制终止显示原因和触发实例。
+- 详情显示开始、结束、播放历时与可选 Cue 标注时长。播放历时按 Voice 分配至释放计算，可能包含暂停和间隔，不等于音频素材长度。
+- 时间轴从固定采集起点计时；钟表时间标注为接收锚点估算。返回实时恢复最近 30 秒；“查看缓存范围”只改变视窗，不停止采集。
+- 控制页支持 AISAC、Selector、Block、Beat、Sequence 多选，展开查看实际设置/事件记录。历史播放不会套用之后的设置值。
+- 空间页独立切换音源、衰减监听点图层，监听点优先显示和点击。
+- 每个客户端只有一张卡，显示 IP 与原生/SDK 通道状态。诊断抽屉提供相对积压增长、接收新鲜度和待处理字节，不将其称作绝对延迟。
 
 ## Unity 通用桥接
 
 将 `integrations/unity` 中的 C# 文件复制到已安装 CRI Unity SDK 的工程。在游戏调试菜单主线程调用：
 
 ```csharp
-CriScope.Unity.CriScopeDiagnostics.SetCaptureEnabled(true, "127.0.0.1");
-CriScope.Unity.CriScopeDiagnostics.SetCaptureEnabled(false);
+CriScope.Unity.CriScopeDiagnostics.Connect("127.0.0.1");
+CriScope.Unity.CriScopeDiagnostics.Disconnect();
 ```
 
 桥接不依赖业务音频管理器，不给播放、暂停、AISAC 业务方法添加采集点。开启后连接桌面 `18961`，转发原生 Monitor 帧；约 500 ms 采样 Atom/FS 内存、StandardStreaming 声池，订阅 BeatSync/Sequence，并对 SDK 可观察 Playback 轮询 Block。Block 轮询不是精确切换回调，不覆盖所有自定义原生 Player；BeatSync 依赖 Cue 实际配置。

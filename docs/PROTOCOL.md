@@ -98,3 +98,14 @@ UI action 白名单为 `workspace`、`live`、`filter`、`select`、`session`、
 `CriScope.exe --mcp` 运行逐行 JSON-RPC stdio 代理，协议 `2024-11-05`，调用已运行桌面的 HTTP 服务。
 
 工具：`list_sessions`、`query_events`、`summarize_window`、`get_ui_state`、`capture_screenshot`、`control_ui`、`connect_native`、`disconnect_native`。截图返回 MCP image 内容。它不执行任意代码、不读取任意文件，也不控制游戏音频业务。
+
+
+## v0.4 播放、时间和界面补充
+
+`lifecycle` 区分 created/allocated/stopped/released；`endReason=playback-limit` 与 `causeId` 表示原生数量限制终止及触发实例。旧 raw 函数记录仍可解释。实例停止与最终释放不混同。
+
+录制头可包含固定 `timeOrigin/timeOriginBasis`、`clockAnchorTime/clockAnchorUtc/clockBasis`；墙钟为接收锚点估算，旧记录无锚点不编造。`receivedAtUtc` 与原生 `time` 分开。SDK 显示投影使用 `originalTime/estimatedTime`，仅为视图副本，不修改原始日志。
+
+`/sessions` 增加 `receiveAgeMilliseconds`、`transportLagGrowthMilliseconds`、`sourceObservationLagGrowthMilliseconds`、`receiverBufferedBytes`。积压为相对本连接/段最好观测的增长，不能视为绝对端到端延迟。
+
+`POST /ui/action` 新增 `fit`、`control-kind`（如 `aisac:false`）、`spatial-layer`（如 `source:false`、`distance-listener:true`、`listener:false`）。`live:true` 返回最新并恢复 30 秒；不影响游戏采集。`/ui/state` 增加起点、控制筛选与图层状态。

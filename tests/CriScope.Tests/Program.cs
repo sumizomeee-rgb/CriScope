@@ -151,6 +151,63 @@ try
         }
     });
 
+    await Run("固定时间起点、墙钟估算与录制回放保留", () =>
+    {
+        string id=Guid.NewGuid().ToString("N");
+        var clock=new ManualClock(new DateTimeOffset(2026,9,26,8,0,0,TimeSpan.Zero));
+        using var live=new Session(Hello(id),clock);
+        var first=Event(id,1,"log",555);first.entity="capture-segment";
+        live.Accept(first);
+        Equal(555d,live.TimeOrigin,"原始时钟不从零伪造，采集起点固定");
+        Equal("capture-start",live.TimeOriginBasis,"起点来源明确");
+        clock.Advance(TimeSpan.FromSeconds(1));
+        var late=Event(id,2,"play",565);live.Accept(late);
+        Equal(first.receivedAtUtc!.Value.AddSeconds(10),live.EstimateWallTime(late)!.Value,"发生时间按来源时差估算，不冒充接收时间");
+        Check(live.FormatWallTime(late).Contains("估算"),"墙钟明确估算口径");
+        live.StartRecording(directory);
+        clock.Advance(TimeSpan.FromSeconds(130));live.Accept(Event(id,3,"metric",700));
+        Equal(555d,live.TimeOrigin,"缓存淘汰后起点不移动");
+        clock.Advance(TimeSpan.FromSeconds(2));
+        Equal(2000d,live.ReceiveAgeMilliseconds!.Value,"新鲜度来自接收单调时钟");
+        live.StopRecording();
+        using var collector=new Collector(directory);var replay=collector.LoadRecording(live.RecordingPath);
+        Equal(live.TimeOrigin,replay.TimeOrigin,"录制恢复原采集起点");
+        Equal(live.EstimateWallTime(late),replay.EstimateWallTime(late),"录制恢复墙钟锚点");
+        Check(replay.ReceiveAgeMilliseconds==null,"历史记录不冒充在线新鲜度");
+        var oldPath=Path.Combine(directory,"old-clock.criscope");
+        File.WriteAllLines(oldPath,[Hello(id).ToJson(),Event(id,1,"play",888).ToJson()]);
+        var old=collector.LoadRecording(oldPath);
+        Equal(888d,old.TimeOrigin,"旧录制采用首个可用事件时间");
+        Check(old.EstimateWallTime(old.Snapshot()[0])==null,"旧录制不猜墙钟");
+        return Task.CompletedTask;
+    });
+
+    await Run("来源到游戏桥观察差仅报告同段相对增长", () =>
+    {
+        string id=Guid.NewGuid().ToString("N");using var s=new Session(Hello(id));
+        WireEvent E(long seq,double time,double observed,int epoch)=>new(){session=id,seq=seq,kind="metric",time=time,observedTime=observed,channel="native",epoch=epoch};
+        s.Accept(E(1,100,9000,1));Equal(0d,s.SourceObservationLagGrowthMilliseconds!.Value,"独立时钟偏移不冒充九千秒延迟");
+        s.Accept(E(2,101,9004,1));Equal(3000d,s.SourceObservationLagGrowthMilliseconds!.Value,"相对来源到桥时间差增长可见");
+        s.Accept(E(3,104,9005,1));Equal(1000d,s.SourceObservationLagGrowthMilliseconds!.Value,"追上来源时相对增长下降");
+        s.Accept(E(4,105,9500,2));Equal(0d,s.SourceObservationLagGrowthMilliseconds!.Value,"新段重新建立相对基线");
+        return Task.CompletedTask;
+    });
+
+    await Run("结束状态按截止时间淘汰且不会误删复用对象", () =>
+    {
+        string id=Guid.NewGuid().ToString("N");using var s=new Session(Hello(id));
+        WireEvent E(long seq,double t,string kind,string entity,string objectId,string lifecycle="")=>new(){session=id,seq=seq,time=t,kind=kind,entity=entity,objectId=objectId,lifecycle=lifecycle};
+        s.Accept(E(1,1,"request","cue","c","created"));s.Accept(E(2,2,"play","voice","v","allocated"));
+        s.Accept(E(3,3,"stop","voice","v","released"));s.Accept(E(4,4,"log","cue","c","released"));
+        Check(!s.Baseline().Any(e=>e.kind is "request" or "play"),"结构化结束不会出现在活动基线");
+        s.Accept(E(5,5,"play","voice","v","allocated"));
+        s.Accept(E(6,130,"metric","resource","m"));
+        Check(s.ViewSnapshot().Any(e=>e.seq==5)&&!s.ViewSnapshot().Any(e=>e.seq==1),"只淘汰已经结束的旧起点，不删除复用后的活动Voice");
+        s.Accept(E(7,131,"gap","",""));
+        Check(s.Baseline().Length==0,"缺失清空所有有序结束状态");
+        return Task.CompletedTask;
+    });
+
     await Run("Live 时间窗口与事件数量有界，回放不受 Live 裁剪", () =>
     {
         string id = Guid.NewGuid().ToString("N");
@@ -184,6 +241,15 @@ static WireEvent Hello(string id, string name = "测试客户端") => new() { ki
 static WireEvent Event(string id, long seq, string kind, double time, double value = 0) => new() { session = id, seq = seq, kind = kind, time = time, value = value, name = "测试音频", objectId = "42", detail = "测试证据" };
 static int FreePort() { var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start(); int port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop(); return port; }
 static async Task Until(Func<bool> condition) { using var timeout = new CancellationTokenSource(5000); while (!condition()) await Task.Delay(10, timeout.Token); }
+
+sealed class ManualClock(DateTimeOffset utc) : TimeProvider
+{
+    long ticks;
+    public override long TimestampFrequency=>TimeSpan.TicksPerSecond;
+    public override DateTimeOffset GetUtcNow()=>utc;
+    public override long GetTimestamp()=>ticks;
+    public void Advance(TimeSpan span){utc+=span;ticks+=span.Ticks;}
+}
 
 sealed class Peer : IDisposable
 {

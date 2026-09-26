@@ -155,6 +155,7 @@ public sealed class NativeEventMapper(string session)
             playbacks[playback] = (name, player);
             var ev = E("request", name, playback, entity: "cue", parent: player,
                 detail: packet.TimeMicroseconds < captureStart ? "连接时已有播放；起点未知" : "CRI Cue 播放实例；不等同于实际 Voice");
+            ev.lifecycle = "created";
             ev.cue = playerCues.TryGetValue(player, out var selectedCue) ? selectedCue.Cue : -1;
             yield return ev;
             foreach (var source in voiceSources.Where(v => voices.GetValueOrDefault(v.Key) == playback).Select(v => v.Value).Distinct())
@@ -174,15 +175,28 @@ public sealed class NativeEventMapper(string session)
             else if (voices.Remove(id, out var owner)) playback = owner;
             if (f == "SoundVoice_FreeVoice" && voiceSources.Remove(id, out var oldSource)) changedSource = oldSource;
             var info = playbacks.GetValueOrDefault(playback);
-            yield return E(f == "SoundVoice_Allocate" ? "play" : "stop", info.Name ?? "Voice", id, entity: "voice", parent: playback,
+            var voiceEvent = E(f == "SoundVoice_Allocate" ? "play" : "stop", info.Name ?? "Voice", id, entity: "voice", parent: playback,
                 detail: f == "SoundVoice_FreeVoice" ? "原生 Voice 释放；reason=" + S("VoiceStopReason") :
                 packet.TimeMicroseconds <= captureStart ? "连接时已存在 Voice；起点未知" : "原生 Voice 分配");
+            voiceEvent.lifecycle = f == "SoundVoice_Allocate" ? "allocated" : "released";
+            yield return voiceEvent;
             if (changedSource != null && SourcePosition(changedSource) is { } changedPosition) yield return changedPosition;
             yield break;
         }
+        if (f == "ExCue_StopByLimit")
+        {
+            var ev = E("stop", playbacks.GetValueOrDefault(playback).Name ?? "Cue", playback, entity: "cue",
+                detail: "播放数量限制触发停止；关联实例见 causeId；实例释放另行记录");
+            ev.lifecycle = "stopped"; ev.endReason = "playback-limit";
+            ev.causeId = Has("cause ExPlaybackId_unique64") ? $"playback:{segment}:" + S("cause ExPlaybackId_unique64") :
+                Has("cause CriAtomExPlaybackId") ? $"playback-id:{segment}:" + S("cause CriAtomExPlaybackId") : "";
+            yield return ev; yield break;
+        }
         if (f == "ExPlaybackInfo_FreeInfo")
         {
-            yield return E("log", playbacks.GetValueOrDefault(playback).Name ?? "Cue 结束", playback, entity: "cue", detail: "CRI 播放实例释放");
+            var ev = E("log", playbacks.GetValueOrDefault(playback).Name ?? "Cue 结束", playback, entity: "cue", detail: "CRI 播放实例释放");
+            ev.lifecycle = "released";
+            yield return ev;
             playbacks.Remove(playback); yield break;
         }
         if (f.Contains("Aisac", StringComparison.Ordinal) && Has("AisacControlValue"))

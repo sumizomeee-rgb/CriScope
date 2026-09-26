@@ -11,6 +11,18 @@ public sealed class WireEvent
     public int epoch { get; set; }
     public double observedTime { get; set; }
     public bool baseline { get; set; }
+    // Receiver metadata is persisted with recordings. Source timestamps remain untouched.
+    public DateTimeOffset? receivedAtUtc { get; set; }
+    public double? timeOrigin { get; set; }
+    public string timeOriginBasis { get; set; } = "";
+    public double? clockAnchorTime { get; set; }
+    public DateTimeOffset? clockAnchorUtc { get; set; }
+    public string clockBasis { get; set; } = "";
+    public double? originalTime { get; set; }
+    public bool estimatedTime { get; set; }
+    public string lifecycle { get; set; } = "";
+    public string endReason { get; set; } = "";
+    public string causeId { get; set; } = "";
     public string kind { get; set; } = "";
     public string source { get; set; } = "";
     public string parentId { get; set; } = "";

@@ -24,7 +24,7 @@ public static class McpProxy
                     new { name="summarize_window", description="汇总指定会话的时间窗口，标注数据来源和保留边界", inputSchema=QuerySchema() },
                     Tool("get_ui_state", "读取桌面工作区、选择、实时跟随和时间范围", new { }),
                     Tool("capture_screenshot", "从真实运行界面导出PNG；不依赖OS截图，不关闭窗口。panel可省略或为timeline", new { panel=new { type="string" } }),
-                    Tool("control_ui", "操作与人工共享的界面状态。action: workspace/live/filter/select/session/range/theme/diagnostics；range的value为起点:终点，select为事件seq", new { action=new { type="string" }, value=new { type="string" } }, new[]{"action"}),
+                    Tool("control_ui", "操作与人工共享的界面状态。action: workspace/live/filter/select/session/range/theme/diagnostics/fit/control-kind/spatial-layer；range的value为来源时间起点:终点，select为事件seq；fit为查看缓存范围，live返回最近窗口", new { action=new { type="string" }, value=new { type="string" } }, new[]{"action"}),
                     Tool("connect_native", "连接指定CRI Monitor端口；开始读取后续原生日志，不初始化游戏内Monitor", new { host=new { type="string" }, port=new { type="integer" } }, new[]{"host"}),
                     Tool("disconnect_native", "停止指定会话的原生日志采集；不卸载游戏的Monitor", new { session=new { type="string" } }, new[]{"session"}) } };
                 else if (method == "tools/call")

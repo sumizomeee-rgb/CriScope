@@ -23,6 +23,7 @@ namespace CriScope.Unity
         private float nextSample;
         private readonly Dictionary<uint, int> blocks = new Dictionary<uint, int>();
         private readonly HashSet<uint> tracked = new HashSet<uint>();
+        private readonly Dictionary<uint, float> cueMetadata = new Dictionary<uint, float>();
         private readonly List<uint> ended = new List<uint>();
         public static bool CaptureEnabled { get { return current != null && current.bridge != null; } }
         public static string Host { get { return host; } }
@@ -92,7 +93,22 @@ namespace CriScope.Unity
             Metric("voices.streaming.capacity", stream.numPoolVoices, "SDK StandardStreaming pool capacity");
             // Public CRI components expose their latest playback. This is not a complete native playback enumeration.
             foreach (var source in FindObjectsOfType<CriAtomSource>())
-                if (source.player != null) tracked.Add(source.player.GetLastPlaybackId().id);
+            {
+                if (source.player == null) continue;
+                var currentPlayback = source.player.GetLastPlaybackId();
+                uint playbackId = currentPlayback.id;
+                tracked.Add(playbackId);
+                float metadataAt;
+                if (playbackId == 0 || playbackId == uint.MaxValue || currentPlayback.status == CriAtomExPlayback.Status.Removed || (cueMetadata.TryGetValue(playbackId, out metadataAt) && Time.realtimeSinceStartup - metadataAt < 30)) continue;
+                var acb = CriAtom.GetAcb(source.cueSheet);
+                CriAtomEx.CueInfo cue;
+                if (acb != null && !string.IsNullOrEmpty(source.cueName) && acb.GetCueInfo(source.cueName, out cue))
+                {
+                    cueMetadata[playbackId] = Time.realtimeSinceStartup;
+                    bridge.Emit(new WireEvent { kind = "cue-info", objectId = "playback:" + playbackId, name = source.cueName, value = cue.length,
+                        detail = "SDK Cue 标注时长（毫秒）；组件最新播放的可选信息，不等于 Voice 实际历时" });
+                }
+            }
             ended.Clear();
             foreach (uint id in tracked)
             {
@@ -109,7 +125,7 @@ namespace CriScope.Unity
                         detail = "SDK observed index; 500 ms poll, not exact audio transition time" });
                 }
             }
-            foreach (var id in ended) tracked.Remove(id);
+            foreach (var id in ended) { tracked.Remove(id); cueMetadata.Remove(id); }
         }
         private void Metric(string name, double value, string detail) { bridge.Emit(new WireEvent { kind = "metric", name = name, value = value, detail = detail }); }
         private void Beat(ref CriAtomExBeatSync.Info info)
@@ -168,5 +184,7 @@ namespace CriScope.Unity
         public static string Status { get { return "Not included in this build"; } }
         public static bool SetCaptureEnabled(bool enabled, string targetHost = "127.0.0.1") { return !enabled; }
 #endif
+        public static bool Connect(string address = "127.0.0.1") { return SetCaptureEnabled(true, address); }
+        public static void Disconnect() { SetCaptureEnabled(false); }
     }
 }

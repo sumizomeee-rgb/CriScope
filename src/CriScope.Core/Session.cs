@@ -1,7 +1,7 @@
 using System.Text;
 namespace CriScope.Core;
 
-public sealed class Session : IDisposable
+public sealed partial class Session : IDisposable
 {
     private readonly object gate = new();
     private readonly Queue<WireEvent> events = new();
@@ -9,6 +9,7 @@ public sealed class Session : IDisposable
     // pagination, Total or Watermark; explicit recording baselines retain original timestamps.
     private readonly Dictionary<string, WireEvent> viewState = new();
     private readonly Dictionary<string, double> endedVoices = new();
+    private readonly SortedSet<(double Time, string Key)> endedOrder = new();
     private StreamWriter? writer;
     private DateTime flushed = DateTime.UtcNow;
     private long watermark;
@@ -40,7 +41,7 @@ public sealed class Session : IDisposable
     public long Evicted { get; private set; }
     public double LastTime { get; private set; }
     public long Watermark { get { lock(gate) return watermark; } }
-    public Session(WireEvent hello) { Id=hello.session; Name=hello.name; Platform=hello.platform; Pid=hello.pid; Source=string.IsNullOrWhiteSpace(hello.source)?"CRI SDK":hello.source; Endpoint=hello.detail; ClientId=hello.clientId; Machine=hello.machine; CaptureId=hello.captureId; Channel=hello.channel; }
+    public Session(WireEvent hello, TimeProvider? timeProvider = null) { Id=hello.session; Name=hello.name; Platform=hello.platform; Pid=hello.pid; Source=string.IsNullOrWhiteSpace(hello.source)?"CRI SDK":hello.source; Endpoint=hello.detail; ClientId=hello.clientId; Machine=hello.machine; CaptureId=hello.captureId; Channel=hello.channel; clock=timeProvider??TimeProvider.System; RestoreClock(hello); }
     public WireEvent[] Snapshot() { lock(gate) return events.ToArray(); }
     public WireEvent[] ViewSnapshot()
     {
@@ -55,7 +56,7 @@ public sealed class Session : IDisposable
     private void UpdateViewState(WireEvent e)
     {
         if(IsReplay) return;
-        if(e.entity=="capture-segment" || e.kind=="gap") {viewState.Clear();endedVoices.Clear();return;}
+        if(e.entity=="capture-segment" || e.kind=="gap") {viewState.Clear();endedVoices.Clear();endedOrder.Clear();return;}
         string? key = e.kind switch {
             "play" => "voice|"+e.objectId,
             "request" => "cue|"+e.objectId,
@@ -66,23 +67,34 @@ public sealed class Session : IDisposable
             _ => null };
         if(e.kind=="selector" && e.detail.Contains("清除全部"))
             foreach(var oldKey in viewState.Keys.Where(k=>k.StartsWith("selector|"+e.objectId+"|",StringComparison.Ordinal)).ToArray()) viewState.Remove(oldKey);
-        if(e.kind=="stop" && viewState.ContainsKey("voice|"+e.objectId)) endedVoices["voice|"+e.objectId]=e.time;
-        if(e.entity=="cue" && (e.kind=="stop" || e.detail.Contains("播放实例释放",StringComparison.Ordinal)))
-            endedVoices["cue|"+e.objectId]=e.time;
+        if(e.kind=="stop" && viewState.ContainsKey("voice|"+e.objectId)) MarkEnded("voice|"+e.objectId,e.time);
+        if(EventSemantics.IsPlaybackEnd(e)) MarkEnded("cue|"+e.objectId,e.time);
         if(key!=null)
         {
             viewState[key]=e;
-            if(e.kind is "play" or "request") endedVoices.Remove(key);
+            if(e.kind is "play" or "request") RemoveEnded(key);
             if(viewState.Count>MaxViewStates)
             {
                 var oldest=viewState.MinBy(pair=>pair.Value.seq).Key;
-                viewState.Remove(oldest);endedVoices.Remove(oldest);ViewStatesEvicted++;
+                viewState.Remove(oldest);RemoveEnded(oldest);ViewStatesEvicted++;
             }
         }
         // Keep the original start while a matching stop is still visible, then discard it.
         double oldestVisible=events.Count>0?events.Peek().time:LastTime;
-        foreach(var ended in endedVoices.Where(pair=>pair.Value<oldestVisible).Select(pair=>pair.Key).ToArray())
-        {viewState.Remove(ended);endedVoices.Remove(ended);}
+        while(endedOrder.Count>0 && endedOrder.Min.Time<oldestVisible)
+        {
+            var ended=endedOrder.Min;
+            viewState.Remove(ended.Key);RemoveEnded(ended.Key);
+        }
+    }
+    private void MarkEnded(string key, double time)
+    {
+        if(!viewState.ContainsKey(key)) return;
+        RemoveEnded(key);endedVoices[key]=time;endedOrder.Add((time,key));
+    }
+    private void RemoveEnded(string key)
+    {
+        if(endedVoices.Remove(key,out var time)) endedOrder.Remove((time,key));
     }
     public bool Accept(WireEvent e, string? raw = null)
     {
@@ -92,6 +104,7 @@ public sealed class Session : IDisposable
             if(e.seq <= watermark && e.kind != "hello") return false;
             // 协议 v1 的桥仅在采集开启时连接；重连不能依赖早已 ACK 的 state=1。
             if(e.kind == "hello") { Name=e.name; Platform=e.platform; Pid=e.pid; Capturing=!IsReplay; return true; }
+            UpdateTiming(e);
             watermark=Math.Max(watermark,e.seq);
             LastTime=Math.Max(LastTime,e.time);
             if(e.kind=="state") Capturing=e.value>0;
@@ -103,7 +116,8 @@ public sealed class Session : IDisposable
             if(writer!=null)
             {
                 try {
-                    writer.WriteLine(raw ?? e.ToJson());
+                    // Persist receiver clock metadata alongside unchanged source fields and native raw evidence.
+                    writer.WriteLine(e.ToJson());
                     recordedThroughSequence=e.seq; recordedThroughTime=LastTime;
                     if((DateTime.UtcNow-flushed).TotalSeconds>=1) {writer.Flush();flushed=DateTime.UtcNow;}
                 } catch(Exception ex) when(ex is IOException or UnauthorizedAccessException) { Error="录制写盘失败："+ex.Message; CloseWriter(); }
@@ -122,9 +136,7 @@ public sealed class Session : IDisposable
             var path=Path.Combine(directory,$"{DateTime.Now:yyyyMMdd-HHmmss-fff}_{Pid}_{Guid.NewGuid():N}.criscope");
             var next=new StreamWriter(new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.Read),new UTF8Encoding(false));
             try {
-                next.WriteLine(new WireEvent {kind="hello",session=Id,name=Name,pid=Pid,platform=Platform,source=Source,
-                    clientId=ClientId,machine=Machine,captureId=CaptureId,channel=Channel,value=1,
-                    detail="CriScope/1; explicit baseline retains original observation times; subsequent events are incremental"}.ToJson());
+                next.WriteLine(RecordingHeader("CriScope/1; explicit baseline retains original observation times; subsequent events are incremental").ToJson());
                 foreach(var ev in Baseline()) next.WriteLine(ev.ToJson());
                 next.Flush();
             }

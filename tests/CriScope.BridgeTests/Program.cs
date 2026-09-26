@@ -64,7 +64,12 @@ var native=Find(a,captureA,"native").Snapshot().Single();var sdk=Find(a,captureA
 Check(native.time==7&&native.observedTime==1200&&sdk.time==1000&&sdk.observedTime==1200.1,"Independent clocks were incorrectly merged");
 Check(native.seq==1&&sdk.seq==1&&native.epoch==1&&native.channel=="native"&&sdk.channel=="sdk","Per-channel sequence/epoch attribution failed");
 Check(Find(b,captureB,"sdk").Snapshot().Single().value==2048&&sdk.value==1024,"Same PID on different machines cross-contaminated values");
-await Send(first,Frame(4,3,0,1200200000,Json(new{count=9,channel=2,reason="queue overflow"})),true);
+Check(native.receivedAtUtc.HasValue&&sdk.receivedAtUtc.HasValue&&Find(a,captureA,"native").TimeOrigin==7,"Source time origin/receiver timestamp absent");
+await Task.Delay(100);
+await Send(first,Frame(3,3,1,1200000000,Json(new{channel=1,connected=true,status="same bridge timestamp"})));
+await Until(()=>Find(a,captureA,"native").TransportLagGrowthMilliseconds>50,"Relative transport backlog growth not observable");
+Check(Find(a,captureA,"native").ReceiveAgeMilliseconds<1000&&Find(a,captureA,"native").ReceiverBufferedBytes>=0,"Receiver freshness/socket buffer metrics absent");
+await Send(first,Frame(4,4,0,1200200000,Json(new{count=9,channel=2,reason="queue overflow"})),true);
 await Until(()=>Find(a,captureA,"sdk").Dropped==9,"Gap was not attributed to SDK channel");
 Check(Find(a,captureA,"native").Dropped==0,"SDK gap polluted native channel");
 string captureNew=Guid.NewGuid().ToString();using var replacement=await Connect(port,a,captureNew,"machine-A");

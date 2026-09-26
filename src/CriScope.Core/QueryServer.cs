@@ -50,7 +50,7 @@ public sealed class QueryServer : IDisposable
             {
                 using var body = await Body(ctx.Request);
                 var action = body.RootElement.GetProperty("action").GetString() ?? "";
-                if (!new[] { "workspace", "live", "filter", "select", "session", "range", "theme", "diagnostics" }.Contains(action))
+                if (!new[] { "workspace", "live", "filter", "select", "session", "range", "theme", "diagnostics", "fit", "control-kind", "spatial-layer" }.Contains(action))
                     throw new ArgumentException("不支持的界面操作");
                 string? value = body.RootElement.TryGetProperty("value", out var v) ? v.ToString() : null;
                 result = ChangeUiState is null ? throw new InvalidOperationException("桌面界面尚未就绪") : await ChangeUiState(action, value);
@@ -74,7 +74,11 @@ public sealed class QueryServer : IDisposable
                 result = collector.Sessions.Select(s => new { id = s.Id, name = s.Name, pid = s.Pid, platform = s.Platform,
                     source = s.Source, clientId = s.ClientId, captureId = s.CaptureId, channel = s.Channel, machine = s.Machine, endpoint = s.Endpoint, status = s.ConnectionStatus, connected = s.Connected,
                     capturing = s.Capturing, recording = s.Recording, replay = s.IsReplay, total = s.Total,
-                    dropped = s.Dropped, evicted = s.Evicted, viewStatesEvicted = s.ViewStatesEvicted, watermark = s.Watermark, lastTime = s.LastTime });
+                    dropped = s.Dropped, evicted = s.Evicted, viewStatesEvicted = s.ViewStatesEvicted, watermark = s.Watermark, lastTime = s.LastTime,
+                    timeOrigin = s.HasTimeOrigin ? (double?)s.TimeOrigin : null, timeOriginBasis = s.TimeOriginBasis,
+                    lastReceivedAtUtc = s.LastReceivedAtUtc, receiveAgeMilliseconds = s.ReceiveAgeMilliseconds,
+                    transportLagGrowthMilliseconds = s.TransportLagGrowthMilliseconds, sourceObservationLagGrowthMilliseconds = s.SourceObservationLagGrowthMilliseconds, receiverBufferedBytes = s.ReceiverBufferedBytes,
+                    timing = "wall clock is a fixed receive-anchor estimate; lag growth is a relative change from best observed source-to-bridge or bridge-to-receiver timing, including clock drift; not absolute end-to-end latency" });
             else if (method == "GET" && path is "/events" or "/summary")
             {
                 var q = ctx.Request.QueryString;

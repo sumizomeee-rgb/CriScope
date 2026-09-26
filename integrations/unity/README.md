@@ -1,6 +1,6 @@
 # Unity outbound capture bridge
 
-Copy `CriScopeBridge.cs`, `CriScopeNativeRelay.cs`, `CriScopeDiagnostics.cs`, and `CriScopeMonitor.cs` into a Unity project that already uses CRIWARE. No project-specific audio manager hooks are required. Call `CriScope.Unity.CriScopeDiagnostics.SetCaptureEnabled(true, "127.0.0.1")` from a debug menu on Unity's main thread; call it with `false` to stop. The address is the desktop service, TCP port 18961. `CaptureEnabled`, `Host`, and `Status` are available to that menu. Edit the service address while disabled; enabled capture automatically connects/retries and locks its destination.
+Copy `CriScopeBridge.cs`, `CriScopeNativeRelay.cs`, `CriScopeDiagnostics.cs`, and `CriScopeMonitor.cs` into a Unity project that already uses CRIWARE. No project-specific audio manager hooks are required. Call `CriScope.Unity.CriScopeDiagnostics.Connect("127.0.0.1")` from a debug menu on Unity's main thread; call `Disconnect()` to stop. The previous `SetCaptureEnabled` entry remains compatible. The address is the desktop service, TCP port 18961. `CaptureEnabled`, `Host`, and `Status` are available to that menu. Edit the service address while disabled; enabled capture automatically connects/retries and locks its destination.
 
 The implementation is enabled only in the Editor, a Development Build, or with the explicit `CRISCOPE_DIAGNOSTICS` symbol. Never add this symbol to performance-baseline or production builds. Before the first call there is no created component, Update loop, transport thread, polling or callback subscription. CRI's own In-Game Preview setting is independent: if the host initialized Monitor itself, that native overhead predates this extension.
 
@@ -18,8 +18,9 @@ This adapter is version-specific, not an official CRI API. It does not promise z
 - `voices.streaming.used` / `.capacity`: the **StandardStreaming** pool only.
 - `beat`: `value` is BPM; detail includes bar, beat, beats per bar and offset.
 - `sequence`: tag is name, embedded event ID is value; sequence position is retained in detail.
+- `cue-info`: optional Cue authored length in milliseconds for the latest active playback exposed by a public CriAtomSource; not the waveform length or a complete enumeration.
 - `block`: first observed or changed block index, sampled every 500 ms. Observed playback IDs come from public CRI components' latest playback and callbacks. This does not enumerate every concurrent native playback or promise exact block-transition time.
-- CRI callback-queue overflow warnings are forwarded. Existing callbacks are preserved through event `+=` / `-=`. SDK main-thread dispatch time is not the native Monitor timestamp; no false temporal alignment is implied.
+- CRI callback-queue overflow warnings are forwarded. Existing callbacks are preserved through event `+=` / `-=`. SDK main-thread dispatch time is not the native Monitor timestamp. The desktop may project callbacks for display using nearby bridge/native clock observations, labels them as estimates, and retains the original channel timestamps.
 
 The native stream remains the authoritative playback/Voice/control source. The SDK extension does not emit synthetic play/pause/stop/AISAC requests.
 

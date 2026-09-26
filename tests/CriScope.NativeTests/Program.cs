@@ -24,6 +24,24 @@ BinaryPrimitives.WriteUInt16BigEndian(shortValue.AsSpan(4), 31);
 BinaryPrimitives.WriteUInt16BigEndian(shortValue.AsSpan(18), 5);
 Reject(() => NativeProtocol.Decode(shortValue), "Parameter overrun accepted");
 
+// Synthetic parameters mirror the observed native lifecycle; no game assets are fixtures.
+var lifecycleMapper=new NativeEventMapper("lifecycle");
+NativePacket P(string name,ulong time,params NativeParameter[] parameters)=>new(31,8,0,time,0,name,0,parameters);
+NativeParameter N(string name,object value)=>new(0,name,value);
+lifecycleMapper.Map(P("StartLogging",1000000)).ToArray();
+var requested=lifecycleMapper.Map(P("ExPlaybackId",1100000,N("ExPlaybackId_unique64",167UL),N("CriAtomExPlayerHn","0x1"),N("cue_name","Fixture"))).Single();
+Check(requested.lifecycle=="created","Cue creation lacks structured lifecycle");
+var limited=lifecycleMapper.Map(P("ExCue_StopByLimit",1200000,N("ExPlaybackId_unique64",167UL),N("cause ExPlaybackId_unique64",168UL),N("VoiceStopReason",54))).Single();
+Check(limited.kind=="stop"&&limited.entity=="cue"&&limited.lifecycle=="stopped"&&limited.endReason=="playback-limit"&&limited.causeId=="playback:1:168","Playback limit lost structured reason/cause");
+Check(EventSemantics.IsPlaybackEnd(limited)&&!EventSemantics.IsPlaybackReleased(limited),"Stop must not masquerade as release");
+var released=lifecycleMapper.Map(P("ExPlaybackInfo_FreeInfo",1300000,N("ExPlaybackId_unique64",167UL))).Single();
+Check(released.name=="Fixture"&&EventSemantics.IsPlaybackReleased(released),"Release loses the stopped instance identity");
+var legacy=new WireEvent{kind="log",name="ExCue_StopByLimit",objectId="9:playback:1:167",raw=limited.raw};
+Check(EventSemantics.IsPlaybackEnd(legacy)&&EventSemantics.EndReason(legacy)=="playback-limit"&&EventSemantics.CauseId(legacy)=="9:playback:1:168","Legacy limit evidence not reconstructed with epoch");
+legacy.raw="{";Check(!EventSemantics.IsPlaybackEnd(legacy)&&EventSemantics.CauseId(legacy)=="","Corrupt legacy evidence must not fabricate reason/cause");
+Check(EventSemantics.IsPlaybackReleased(new(){entity="cue",detail="CRI 播放实例释放"}),"Legacy release no longer supported");
+Console.WriteLine("PASS structured cue lifecycle, limit cause, stopped/released distinction and legacy evidence compatibility");
+
 int fixtures = 0;
 foreach (var path in args)
 {

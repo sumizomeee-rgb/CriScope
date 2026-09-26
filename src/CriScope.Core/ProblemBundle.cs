@@ -32,10 +32,7 @@ public static class ProblemBundle
             string name = $"{channelName}-{fileId}.criscope";
             using (var writer = Writer(archive, name))
             {
-                writer.WriteLine(new WireEvent { kind = "hello", value = 1, session = source.Id, name = source.Name,
-                    clientId = source.ClientId, captureId = source.CaptureId, machine = source.Machine, channel = source.Channel,
-                    pid = source.Pid, platform = source.Platform, source = source.Source,
-                    detail = "Problem bundle; baseline is explicitly marked; independent source clock" }.ToJson());
+                writer.WriteLine(source.RecordingHeader("Problem bundle; baseline is explicitly marked; independent source clock").ToJson());
                 foreach (var ev in context.Concat(interval).OrderBy(e => e.seq)) writer.WriteLine(ev.ToJson());
             }
             bool lost = all.Any(e => e.kind == "gap" && e.time <= end) || evidence.HasUnrecordedGap && end>evidence.RecordedThroughTime;
@@ -67,7 +64,7 @@ public static class ProblemBundle
         foreach (var e in events.OrderBy(e => e.seq))
         {
             if (e.kind == "gap" || e.entity == "capture-segment") { state.Clear(); continue; }
-            if(e.entity=="cue" && (e.kind=="stop" || e.detail.Contains("播放实例释放",StringComparison.Ordinal)))
+            if(EventSemantics.IsPlaybackEnd(e))
             { state.Remove("request|"+e.objectId); continue; }
             if (e.kind == "stop") { state.Remove("play|" + e.objectId); continue; }
             if(e.kind=="selector" && e.detail.Contains("清除全部"))

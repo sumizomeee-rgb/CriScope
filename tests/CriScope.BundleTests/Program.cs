@@ -30,6 +30,7 @@ try {
     var log=archive.Entries.Single(e=>e.Name.EndsWith(".criscope"));
     using(var reader=new StreamReader(log.Open())) {
         var lines=reader.ReadToEnd().Split('\n',StringSplitOptions.RemoveEmptyEntries).Select(WireEvent.Parse).ToArray();
+        Check(lines[0].timeOrigin==session.TimeOrigin,"问题包保留原记录的固定时间起点");
         Check(lines.Any(e=>e.kind=="remove" && e.baseline) && !lines.Any(e=>e.kind=="position"),"区间起点重建尊重销毁");
         Check(lines.Single(e=>e.kind=="metric").time==4,"区间事件保留原始时间");
     }
@@ -73,7 +74,7 @@ try {
         }
         registered.TryRemove("bundle-live-fixture",out _);
     }
-    Console.WriteLine("问题包与状态基线：15项通过");
+    Console.WriteLine("问题包与状态基线：16项通过");
     WireEvent E(long seq,double time,string kind,string entity,string id,double value=0)=>new(){session=hello.session,seq=seq,time=time,kind=kind,entity=entity,objectId=id,value=value};
 } finally {Directory.Delete(directory,true);}
 static void Check(bool ok,string message){if(!ok)throw new Exception(message);Console.WriteLine("通过："+message);}

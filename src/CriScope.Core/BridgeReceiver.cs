@@ -93,11 +93,13 @@ public sealed partial class Collector
                 {
                     if (epoch <= 0 || epoch < nativeEpoch) throw new InvalidDataException("原生段编号无效或倒退");
                     if (epoch != nativeEpoch) { mapper = new NativeEventMapper(native.Id); nativeEpoch = epoch; }
+                    native.ObserveTransport(observed, client.Available);
                     try
                     {
                         foreach (var ev in mapper.Map(NativeProtocol.Decode(payload)))
                         { ev.objectId = string.IsNullOrEmpty(ev.objectId) ? "" : epoch + ":" + ev.objectId;
                           ev.parentId = string.IsNullOrEmpty(ev.parentId) ? "" : epoch + ":" + ev.parentId;
+                          ev.causeId = string.IsNullOrEmpty(ev.causeId) ? "" : epoch + ":" + ev.causeId;
                           Accept(native, ev, observed, epoch); }
                         native.SetCaptureState(true, true, "原生采集中 · 游戏桥接");
                     }
@@ -116,6 +118,7 @@ public sealed partial class Collector
                     if (!double.IsFinite(ev.time) || ev.time < 0 || !double.IsFinite(ev.value) || ev.kind is "hello" ||
                         ev.kind == null || ev.name == null || ev.detail == null || ev.name.Length > 4096 || ev.detail.Length > 32768)
                         throw new InvalidDataException("SDK事件无效");
+                    sdk.ObserveTransport(observed, client.Available);
                     ev.source = "cri-sdk"; Accept(sdk, ev, observed, epoch);
                 }
                 else if (kind == 3)
@@ -124,6 +127,7 @@ public sealed partial class Collector
                     int channel = s.GetProperty("channel").GetInt32();
                     if (channel is not (1 or 2)) throw new InvalidDataException("状态通道无效");
                     var target = channel == 1 ? native : sdk;
+                    target.ObserveTransport(observed, client.Available);
                     bool connected = s.GetProperty("connected").GetBoolean();
                     target.SetCaptureState(connected, connected, s.GetProperty("status").GetString() ?? "状态未知");
                 }
@@ -133,6 +137,7 @@ public sealed partial class Collector
                     long count = g.GetProperty("count").GetInt64(); int channel = g.GetProperty("channel").GetInt32();
                     if (count < 0 || channel is not (1 or 2)) throw new InvalidDataException("丢失数量或通道无效");
                     var target = channel == 1 ? native : sdk;
+                    target.ObserveTransport(observed, client.Available);
                     if (channel == 1 && count > 0) mapper = new NativeEventMapper(native.Id);
                     Accept(target, new WireEvent { kind = "gap", name = "传输记录缺失", time = target.LastTime,
                         value = count, source = target.Source, detail = g.GetProperty("reason").GetString() ?? "未知",
