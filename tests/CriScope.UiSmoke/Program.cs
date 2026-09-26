@@ -293,6 +293,72 @@ public sealed class SmokeApp : Application
                     inspectSession.Accept(new WireEvent {session=inspectSession.Id,seq=4,kind="metric",time=210,name="CPU",value=1});
                     await Task.Delay(400);
                     Check((double)typeof(MainWindow).GetField("_lastInspectorEnd",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(window)!>=210,"首次选择后详情会随最新观测刷新");
+                    var retainedExpanders=Field<StackPanel>("_details").Children.OfType<Expander>().ToArray();
+                    foreach(var expander in retainedExpanders)expander.IsExpanded=true;
+                    await Task.Delay(150);
+                    var drawerScroll=Field<Border>("_inspector").GetVisualDescendants().OfType<ScrollViewer>().First();
+                    drawerScroll.Offset=new Vector(0,100);await Task.Delay(100);var drawerOffset=drawerScroll.Offset;
+                    for(int n=0;n<30;n++)
+                    {
+                        inspectSession.Accept(new WireEvent {session=inspectSession.Id,seq=5+n,kind="metric",time=211+n,name="CPU",value=1});
+                        window.ApplyUiAction("live","true");
+                    }
+                    await Task.Delay(150);
+                    Check(retainedExpanders.All(x=>x.IsExpanded&&Field<StackPanel>("_details").Children.Contains(x)),"连续30次刷新不重建或关闭抽屉折叠项");
+                    Check(drawerScroll.Offset==drawerOffset&&ReferenceEquals(Field<WireEvent>("_selected"),inspectRequest),"实时刷新保留抽屉滚动和选中事件");
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v041-drawer-retained.png"),window.CapturePng("window"));
+                    var closeDrawer=Field<Border>("_inspector").GetVisualDescendants().OfType<Button>().Single(x=>ToolTip.GetTip(x)?.ToString()=="关闭详情");
+                    Click(closeDrawer);
+                    Check(!State().GetProperty("inspector").GetBoolean()&&State().GetProperty("live").GetBoolean(),"抽屉自身关闭按钮生效且不停止实时跟随");
+                    Check(window.GetVisualDescendants().OfType<Button>().Any(x=>x.Content is StackPanel sp&&sp.Children.OfType<TextBlock>().Any(b=>b.Text=="全览")),"缩放按钮恢复全览短文案");
+                    var controlsFixture=new[] {
+                        new WireEvent {kind="aisac",session="n",seq=1,time=1,objectId="p1",name="Attack",value=0},
+                        new WireEvent {kind="aisac",session="n",seq=2,time=2,objectId="p2",name="Attack",value=.05},
+                        new WireEvent {kind="aisac",session="n",seq=3,time=3,objectId="p2",name="Attack",value=.1},
+                        new WireEvent {kind="request",entity="cue",session="n",seq=4,time=4,objectId="pb1",parentId="p1",name="Same Cue"},
+                        new WireEvent {kind="request",entity="cue",session="n",seq=5,time=5,objectId="pb2",parentId="p1",name="Same Cue"},
+                        new WireEvent {kind="beat",session="s",seq=6,time=6,objectId="callback-a",parentId="pb1",name="BeatSync",value=120,detail="bar=2; beat=3"},
+                        new WireEvent {kind="sequence",session="s",seq=7,time=7,objectId="callback-b",parentId="pb1",name="FirstTag",value=1},
+                        new WireEvent {kind="sequence",session="s",seq=8,time=8,objectId="callback-c",parentId="pb1",name="SecondTag",value=2},
+                        new WireEvent {kind="beat",session="s",seq=9,time=9,objectId="callback-d",parentId="pb2",name="BeatSync"},
+                        new WireEvent {kind="sequence",session="s",seq=10,time=10,objectId="callback-e",name="Unlinked"},
+                        new WireEvent {kind="block",entity="control",session="n",seq=11,time=11,objectId="p1",name="请求下一 Block",value=2},
+                        new WireEvent {kind="block",session="s",seq=12,time=12,objectId="pb1",parentId="pb1",name="Current block",value=1},
+                        new WireEvent {kind="aisac",session="n",seq=13,time=13,objectId="category:8",name="CategoryVolume",value=.5}};
+                    var controlLabels=new ControlIdentityLabels();
+                    var grouped=ControlPresentation.Group(controlsFixture,20,labels:controlLabels);
+                    var attack=grouped.Single(g=>g.Name=="Attack");
+                    Check(attack.Rows.Length==2&&attack.Summary.Contains("2 个 Player")&&attack.Rows.All(r=>r.Name.StartsWith("Player #")),"同名AISAC只一个父组，数量与Player编号明确区分");
+                    Check(attack.Rows[0].Latest.value==0&&attack.Rows[1].Records.Length==2&&attack.Rows[1].Latest.value==.1,"各Player设置记录和值保持独立，不制造混合参数值");
+                    Check(grouped.Count(g=>g.Name.StartsWith("Same Cue"))==2&&grouped.First(g=>g.Name.StartsWith("Same Cue")).Rows.Single(r=>r.Kind=="sequence").Records.Length==2,"同名Cue的两次播放不合并，同实例Sequence标签合为事件类型");
+                    Check(grouped.Single(g=>g.Name=="未关联播放实例").Rows.Single().Latest.name=="Unlinked","无明确Playback关联的回调保持未关联");
+                    Check(grouped.Single(g=>g.Name.Contains("Block 请求")).Rows.Single().Latest.value==2&&grouped.First(g=>g.Name.StartsWith("Same Cue")).Rows.Single(r=>r.Kind=="block").Latest.value==1,"Player的Block请求与Playback位置采样分开展示");
+                    Check(grouped.Single(g=>g.Name=="CategoryVolume").Rows.Single().Name.StartsWith("Category #"),"原生Category作用域不冒充Player");
+                    var retainedPlayer=attack.Rows[1].Name;
+                    Check(ControlPresentation.Group(controlsFixture.Where(e=>e.objectId!="p1"),20,new HashSet<string>{"aisac"},controlLabels).Single(g=>g.Name=="Attack").Rows.Single().Name==retainedPlayer,"过滤和旧记录退出缓存不会重排Player编号");
+                    Check(ControlPresentation.Value(controlsFixture[5])=="120 BPM · 小节 2 · 拍 3","Beat摘要展示BPM小节拍数而非SDK原始前缀");
+                    var controlSession=Meta(Guid.NewGuid().ToString("N"),"native","grouping");sessions[controlSession.Id]=controlSession;
+                    foreach(var item in controlsFixture) {item.session=controlSession.Id;controlSession.Accept(item);}
+                    Select(controlSession);window.ApplyUiAction("workspace","控制");window.ApplyUiAction("range","0:20");
+                    var groupedTimeline=Field<TimelineControl>("_timeline");
+                    var firstGroup=ControlPresentation.Group(groupedTimeline.Events,20,labels:groupedTimeline.ControlLabels).First();
+                    typeof(TimelineControl).GetMethod("ToggleExpansion",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(groupedTimeline,[firstGroup.Key]);
+                    await Task.Delay(100);
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v041-grouping.png"),window.CapturePng("window"));
+                    typeof(MainWindow).GetMethod("SelectEvent",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,[controlsFixture[2]]);
+                    Check(Field<StackPanel>("_details").Children.OfType<Expander>().Any(x=>x.Tag?.ToString()=="history"&&x.IsExpanded),"点击控制子行在抽屉直接显示设置记录");
+                    await Task.Delay(150);
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v041-history.png"),window.CapturePng("window"));
+                    var sharedSetting=new WireEvent {session=controlSession.Id,seq=14,kind="aisac",objectId="p1",name="Shared",time=14,value=1};controlSession.Accept(sharedSetting);
+                    window.ApplyUiAction("live","true");
+                    typeof(MainWindow).GetMethod("SelectEvent",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,[sharedSetting]);
+                    typeof(MainWindow).GetMethod("Inspector",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,null);
+                    var ownerButtons=Field<StackPanel>("_details").Children.OfType<Button>().Where(x=>x.Tag?.ToString()?.StartsWith("owner:")==true).ToArray();
+                    Check(ownerButtons.Length==2&&ownerButtons.Select(b=>b.Tag).Distinct().Count()==2,"同名Cue关联按钮按实例身份保留，不复用到另一次播放");
+                    Click(ownerButtons[1]);Check(Field<WireEvent>("_selected").objectId=="pb2","刷新后的同名关联链接仍指向正确实例");
+                    var blockRequest=new WireEvent {kind="block",entity="control",objectId="pb1",name="请求下一 Block",time=15,value=3};
+                    var blockGroup=ControlPresentation.Group(controlsFixture.Append(blockRequest),20).First(g=>g.Name.StartsWith("Same Cue"));
+                    Check(blockGroup.Rows.Any(r=>r.Name=="请求下一 Block")&&blockGroup.Rows.Any(r=>r.Name=="Block 位置采样"),"Playback级Block请求同样不伪装成位置采样");
                     Console.WriteLine($"结果：{passed}/{passed} UI 检查通过"); desktop.Shutdown(0);
                 }
                 catch (Exception ex) { Console.Error.WriteLine($"FAIL：已通过 {passed} 项；{ex}"); desktop.Shutdown(1); }

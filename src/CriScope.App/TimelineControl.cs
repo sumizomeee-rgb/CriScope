@@ -17,6 +17,7 @@ public sealed class TimelineControl : Control
     public WireEvent[] Discontinuities { get; set; } = [];
     public WireEvent[] SupplementMetrics { get; set; } = [];
     public WireEvent? Selected { get; set; }
+    public ControlIdentityLabels ControlLabels { get; set; } = new();
     public double End { get; set; } = 30;
     public double Span { get; set; } = 30;
     public bool Live { get; set; } = true;
@@ -55,18 +56,18 @@ public sealed class TimelineControl : Control
     private double _groupEnd=double.NaN, _controlEnd=double.NaN;
     private int _controlMask;
     private PlaybackGroup[] _playbackGroups=[];
-    private ControlRow[] _controlRows=[];
+    private ControlGroup[] _controlRows=[];
     private PlaybackGroup[] PlaybackGroups()
     {
         if(!ReferenceEquals(_groupEvents,Events)||!ReferenceEquals(_groupGaps,Discontinuities)||_groupEnd!=End)
         { _groupEvents=Events;_groupGaps=Discontinuities;_groupEnd=End;_playbackGroups=PlaybackPresentation.Group(Events.Concat(Discontinuities),End); }
         return _playbackGroups;
     }
-    private ControlRow[] ControlRows()
+    private ControlGroup[] ControlRows()
     {
         var mask=0;for(int i=0;i<ControlPresentation.Kinds.Length;i++)if(ControlKinds.Contains(ControlPresentation.Kinds[i]))mask|=1<<i;
         if(!ReferenceEquals(_controlEvents,Events)||_controlEnd!=End||_controlMask!=mask)
-        { _controlEvents=Events;_controlEnd=End;_controlMask=mask;_controlRows=ControlPresentation.Group(Events,End,ControlKinds); }
+        { _controlEvents=Events;_controlEnd=End;_controlMask=mask;_controlRows=ControlPresentation.Group(Events,End,ControlKinds,ControlLabels); }
         return _controlRows;
     }
     private const double LabelWidth = 214;
@@ -193,12 +194,12 @@ public sealed class TimelineControl : Control
             {
                 Text(c,status+" · "+group.Voices.Length+" Voice",27,y+20,group.ActiveVoiceCount>0&&SourceConnected?Palette.Good:Palette.Muted,10);
                 var duration=group.DurationAt(End);
-                var durationText=duration is {} elapsed?(group.EndedAt!=null?"持续 ":"已持续 ")+elapsed.ToString("0.000",CultureInfo.InvariantCulture)+" 秒":"历时未能完整确认";
+                var durationText=duration is {} elapsed?(group.EndedAt!=null?"持续 ":"已持续 ")+elapsed.ToString("0.000",CultureInfo.InvariantCulture)+" 秒":"";
                 Text(c,durationText,27,y+37,size:9);
             }
-            var beginLabel=group.StartedAt is {} began?"+"+Stamp(began):"开始时间未记录";
+            var beginLabel=group.StartedAt is {} began?"+"+Stamp(began):"";
             var endedLabel=group.EndedAt??group.InstanceEndedAt;
-            using(c.PushClip(new Rect(LabelWidth+8,y+1,Math.Max(0,PlotWidth-16),16)))Text(c,beginLabel+(endedLabel is {} finished?" → +"+Stamp(finished):" → "+status),LabelWidth+10,y+3,size:9);
+            using(c.PushClip(new Rect(LabelWidth+8,y+1,Math.Max(0,PlotWidth-16),16)))Text(c,(beginLabel.Length>0?beginLabel+" → ":"")+(endedLabel is {} finished?"+"+Stamp(finished):status),LabelWidth+10,y+3,size:9);
             _expandHits.Add((new Rect(0,y,24,54),key));_hits.Add((new Rect(24,y,LabelWidth-24,54),anchor));
             // A Cue request is a point observation, not evidence of continuous voice allocation.
             if(group.Request is {} request&&request.time>=Start&&request.time<=End)
@@ -256,52 +257,57 @@ public sealed class TimelineControl : Control
         double chipX=12,chipY=40;
         foreach(var kind in ControlPresentation.Kinds)
         {
-            var width=kind=="sequence"?112:kind=="selector"?104:kind=="aisac"?90:82;
+            var width=kind=="sequence"?112:kind=="selector"?104:kind=="aisac"?90:kind=="beat"?104:82;
             if(chipX+width>Bounds.Width-12){chipX=12;chipY+=31;}
             DrawToggle(c,new Rect(chipX,chipY,width,25),ControlPresentation.KindLabel(kind),ControlKinds.Contains(kind),"control:"+kind,kind=="aisac"?Palette.Selection:kind is "beat" or "sequence"?Palette.Good:Palette.Request);
             chipX+=width+7;
         }
-        if(chipX+215<Bounds.Width)Text(c,"可多选 · 展开看记录 · ○ SDK 约时",chipX+8,chipY+6,size:10);
+        if(chipX+215<Bounds.Width)Text(c,"可多选 · 展开看对象 · 点击子行看记录",chipX+8,chipY+6,size:10);
         var groups=ControlRows();
         if(groups.Length==0){_contentHeight=0;Empty(c,ControlKinds.Count==0?"尚未选择控制类型":"当前筛选没有记录",ControlKinds.Count==0?"点击上方分类，可同时查看多种控制。":"显示采集到的设置和事件；连接之前的值不会补造。");return;}
         var contentTop=chipY+33;
         double y=contentTop-_vertical;int i=0;
         using var clip=c.PushClip(new Rect(0,contentTop-5,Bounds.Width,Math.Max(0,Bounds.Height-contentTop-23)));
-        foreach(var row in groups)
+        foreach(var group in groups)
         {
-            var last=row.Latest;var key=row.Key;bool expanded=_expanded.Contains(key);
-            var samples=row.Records.Where(e=>e.time>=Start).ToArray();
-            var shown=expanded?(samples.Length==0?new[]{last}:samples):[];
+            bool expanded=_expanded.Contains(group.Key);
             bool compact=PlotWidth<400;
-            var rowHeight=compact?66d:49d;var recordsTop=rowHeight+27;
-            double h=expanded?recordsTop+shown.Length*28:rowHeight;
-            if(!VisibleRow(y,h,contentTop-5)){y+=h;i++;continue;}
-            var brush=last.kind=="aisac"?Palette.Selection:last.kind is "beat" or "sequence"?Palette.Good:Palette.Request;
-            if(i++%2==0)c.FillRectangle(Palette.Alternate,new Rect(0,y,Bounds.Width,h));
-            RowName(c,(expanded?"− ":"+ ")+row.Name,y+4,brush);
-            Text(c,row.TargetLabel+" · "+row.Records.Length+" 条记录",12,y+26,size:10);
-            using(c.PushClip(new Rect(LabelWidth+8,y+1,Math.Max(0,compact?PlotWidth-16:PlotWidth-220),25)))
-                Text(c,(last.kind is "aisac" or "selector"?"最近设置：":"最近事件：")+ControlPresentation.Value(last),LabelWidth+10,y+5,Palette.Text,12);
-            Text(c,(last.estimatedTime?"SDK 约于 +":"于 +")+Stamp(last.time),compact?LabelWidth+10:Math.Max(LabelWidth+180,Bounds.Width-202),y+(compact?25:6),size:10);
-            _expandHits.Add((new Rect(0,y,24,rowHeight),key));
-            _hits.Add((new Rect(24,y,LabelWidth-24,rowHeight),last));
-            // Writes are discrete observations. No curve is inferred between independent settings.
-            foreach(var e in samples)
-            {var x=X(e.time);c.DrawEllipse(e.estimatedTime?null:brush,e.estimatedTime?new Pen(brush,1.3):null,new Point(x,y+rowHeight-14),3,3);_hits.Add((new Rect(x-5,y+rowHeight-24,10,22),e));}
-            if(samples.Length==0)Text(c,"当前范围无新记录 · 上方保留最近一次观测",LabelWidth+10,y+rowHeight-20,size:10);
-            if(expanded)
+            double rowHeight=compact?66:52;
+            double height=48+(expanded?group.Rows.Length*rowHeight:0);
+            if(!VisibleRow(y,height,contentTop-5)){y+=height;continue;}
+            c.FillRectangle(Palette.Alternate,new Rect(0,y,Bounds.Width,48));
+            using(c.PushClip(new Rect(12,y+1,Math.Max(0,Bounds.Width-36),45)))
             {
-                Text(c,samples.Length==0?"最近一次记录在当前时间范围之前":samples.Length==1?"当前范围只有一次记录":$"当前范围 {samples.Length} 次记录 · 按发生顺序",LabelWidth+10,y+rowHeight+4,Palette.Muted,10);
-                for(int n=0;n<shown.Length;n++)
-                {
-                    var e=shown[n];var top=y+recordsTop+n*28;
-                    if(!VisibleRow(top,28,contentTop-5))continue;
-                    Text(c,(e.estimatedTime?"约 +":"+")+Stamp(e.time),28,top+5,size:10);
-                    using(c.PushClip(new Rect(LabelWidth+8,top,Math.Max(0,PlotWidth-10),28)))Text(c,ControlPresentation.Value(e),LabelWidth+10,top+4,brush,11);
-                    _hits.Add((new Rect(24,top,Math.Max(0,Bounds.Width-32),28),e));
-                }
+                Text(c,(expanded?"− ":"+ ")+group.Name,12,y+4,Palette.Text,12);
+                Text(c,group.Summary,27,y+26,Palette.Muted,10);
             }
-            y+=h;
+            _expandHits.Add((new Rect(0,y,Math.Max(0,Bounds.Width-20),48),group.Key));
+            y+=48;
+            if(!expanded)continue;
+            foreach(var row in group.Rows)
+            {
+                if(!VisibleRow(y,rowHeight,contentTop-5)){y+=rowHeight;continue;}
+                var last=row.Latest;var samples=row.Records.Where(e=>e.time>=Start).ToArray();
+                var brush=last.kind=="aisac"?Palette.Selection:last.kind is "beat" or "sequence"?Palette.Good:Palette.Request;
+                if(i++%2==0)c.FillRectangle(Palette.Panel,new Rect(0,y,Bounds.Width,rowHeight));
+                using(c.PushClip(new Rect(26,y+1,LabelWidth-32,rowHeight)))
+                {
+                    Text(c,row.Name,28,y+4,brush,12);
+                    Text(c,$"{row.Records.Length} 条记录 · 点击查看",28,y+27,size:10);
+                }
+                using(c.PushClip(new Rect(LabelWidth+8,y+1,Math.Max(0,compact?PlotWidth-16:PlotWidth-220),25)))
+                    Text(c,(last.kind is "aisac" or "selector"?"最近设置：":"最近记录：")+ControlPresentation.Value(last),LabelWidth+10,y+5,Palette.Text,12);
+                Text(c,(last.estimatedTime?"约 +":"+")+Stamp(last.time),compact?LabelWidth+10:Math.Max(LabelWidth+180,Bounds.Width-202),y+(compact?25:6),size:10);
+                _hits.Add((new Rect(24,y,Math.Max(0,Bounds.Width-44),rowHeight),last));
+                // Discrete settings and callbacks; no interpolated curve or mixed parent value.
+                foreach(var e in samples)
+                {
+                    var x=X(e.time);c.DrawEllipse(e.estimatedTime?null:brush,e.estimatedTime?new Pen(brush,1.3):null,new Point(x,y+rowHeight-11),3,3);
+                    _hits.Add((new Rect(x-5,y+rowHeight-20,10,20),e));
+                }
+                if(samples.Length==0)Text(c,"此时间窗无新记录",LabelWidth+10,y+rowHeight-19,size:10);
+                y+=rowHeight;
+            }
         }
         _contentHeight=y+_vertical-contentTop;
     }
