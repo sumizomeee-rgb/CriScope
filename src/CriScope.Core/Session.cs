@@ -60,6 +60,8 @@ public sealed partial class Session : IDisposable
         string? key = e.kind switch {
             "play" => "voice|"+e.objectId,
             "request" => "cue|"+e.objectId,
+              "category" => "category|"+e.parentId+"|"+e.objectId,
+              "category-info" => "category-info|"+e.objectId,
             "aisac" or "selector" => e.kind+"|"+e.objectId+"|"+e.name,
             "position" or "remove" => "position|"+e.entity+"|"+e.objectId,
             "metric" => "metric|"+e.objectId+"|"+e.name,
@@ -68,7 +70,11 @@ public sealed partial class Session : IDisposable
         if(e.kind=="selector" && e.detail.Contains("清除全部"))
             foreach(var oldKey in viewState.Keys.Where(k=>k.StartsWith("selector|"+e.objectId+"|",StringComparison.Ordinal)).ToArray()) viewState.Remove(oldKey);
         if(e.kind=="stop" && viewState.ContainsKey("voice|"+e.objectId)) MarkEnded("voice|"+e.objectId,e.time);
-        if(EventSemantics.IsPlaybackEnd(e)) MarkEnded("cue|"+e.objectId,e.time);
+        if(EventSemantics.IsPlaybackEnd(e))
+          {
+              MarkEnded("cue|"+e.objectId,e.time);
+              foreach(var categoryKey in viewState.Keys.Where(k=>k.StartsWith("category|"+e.objectId+"|",StringComparison.Ordinal)).ToArray()) MarkEnded(categoryKey,e.time);
+          }
         if(key!=null)
         {
             viewState[key]=e;

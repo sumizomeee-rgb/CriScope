@@ -28,8 +28,11 @@ public sealed class ControlIdentityLabels
     }
 }
 
+public enum ControlKind { Aisac, Selector, Block, BeatSync, Sequence, Other }
+
 public static class ControlPresentation
 {
+    public static ControlKind Type(string kind) => kind switch { "aisac" => ControlKind.Aisac, "selector" => ControlKind.Selector, "block" => ControlKind.Block, "beat" => ControlKind.BeatSync, "sequence" => ControlKind.Sequence, _ => ControlKind.Other };
     public static readonly string[] Kinds = ["aisac", "selector", "block", "beat", "sequence"];
     public static string KindLabel(string kind) => kind switch
     {
@@ -53,7 +56,7 @@ public static class ControlPresentation
         {
             var rows = parameter.GroupBy(e => (e.session, e.objectId)).Select(g => new ControlRow(
                 Key("setting", g.Key.session, g.Key.objectId, parameter.Key.kind, parameter.Key.name), parameter.Key.kind,
-                targets[g.Key], "", g.ToArray())).ToArray();
+                targets[g.Key], string.Join(" · ", playbacks.Values.Where(p => p.PlayerId == g.Key.objectId && AssociationPresentation.ActiveAt(p, end)).Select(p => p.Name + " [" + labels.Get("播放", p.Id) + "]")), g.ToArray())).ToArray();
             var counts = rows.GroupBy(r => r.Name.Split(" #")[0]).Select(g => g.Key == "对象未提供" ? g.Key : $"{g.Count()} 个 {g.Key}");
             result.Add(new ControlGroup(Key("parameter", parameter.Key.kind, parameter.Key.name), parameter.Key.name,
                 KindLabel(parameter.Key.kind) + " · " + string.Join("、", counts) + $" · {parameter.Count()} 次设置", rows));

@@ -50,7 +50,7 @@ public sealed class QueryServer : IDisposable
             {
                 using var body = await Body(ctx.Request);
                 var action = body.RootElement.GetProperty("action").GetString() ?? "";
-                if (!new[] { "workspace", "live", "filter", "select", "session", "range", "theme", "diagnostics", "fit", "control-kind", "spatial-layer" }.Contains(action))
+                if (!new[] { "workspace", "live", "filter", "select", "session", "range", "theme", "diagnostics", "fit", "control-kind", "spatial-layer", "navigate", "back", "log-search", "log-follow" }.Contains(action))
                     throw new ArgumentException("不支持的界面操作");
                 string? value = body.RootElement.TryGetProperty("value", out var v) ? v.ToString() : null;
                 result = ChangeUiState is null ? throw new InvalidOperationException("桌面界面尚未就绪") : await ChangeUiState(action, value);

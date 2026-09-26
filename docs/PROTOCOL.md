@@ -78,7 +78,7 @@ Live 窗口限制为 120 秒或 120,000 条；回放每文件最多 2,000,000 �
 | POST `/native/connect` | `{"host":"127.0.0.1","port":2002}` |
 | POST `/native/disconnect` | `{"session":"..."}` |
 
-UI action 白名单为 `workspace`、`live`、`filter`、`select`、`session`、`range`、`theme`、`diagnostics`。值为字符串；workspace 使用 `Timeline`、`AISAC`、`Mixing`、`Location`、`Performance`；range 使用 `起点:终点` 秒数。未知 action 被拒绝。截图不接受任意输出路径，调用者自行保存响应。
+UI action 白名单为 `workspace`、`live`、`filter`、`select`、`session`、`range`、`theme`、`diagnostics`、`fit`、`control-kind`、`spatial-layer`、`navigate`、`back`、`log-search`、`log-follow`。值为字符串；workspace 使用 `Timeline`、`AISAC`、`Mixing`、`Location`、`Performance`、`Logs`；range 使用 `起点:终点` 秒数。未知 action 被拒绝。截图不接受任意输出路径，调用者自行保存响应。
 
 事件/汇总查询参数：
 

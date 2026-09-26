@@ -20,5 +20,21 @@ internal sealed class Palette(bool light)
     public IBrush Request => B(Light ? "#A36D20" : "#E6BA78");
     public IBrush Listener => B(Light ? "#386FB5" : "#88B5F6");
     public IBrush Hover => B(Light ? "#E6E0D5" : "#25303D");
+    public IBrush Control(string kind) => ControlPresentation.Type(kind) switch
+    {
+        ControlKind.Aisac => B(Light ? "#7550AF" : "#BDA2E8"),
+        ControlKind.Selector => B(Light ? "#946718" : "#D8B76A"),
+        ControlKind.Block => B(Light ? "#B04E32" : "#EB987C"),
+        ControlKind.BeatSync => B(Light ? "#237C71" : "#75C8B4"),
+        ControlKind.Sequence => B(Light ? "#3B6FAF" : "#8FB9F0"), _ => Muted
+    };
+    public IBrush SequenceTag(string tag)
+    {
+        // FNV-1a is stable across processes, unlike string.GetHashCode().
+        uint hash = 2166136261; foreach (char c in tag) { hash ^= c; hash *= 16777619; }
+        string[] colors = Light ? ["#8D536E", "#6E7141", "#427D8E", "#895C40", "#67588F", "#3D7760", "#90633F", "#6B6987"]
+            : ["#D9A0BC", "#B8BE83", "#8EC1CC", "#D6AC8E", "#B5A6D3", "#9FC3AD", "#D1B58E", "#ADAFCB"];
+        return B(colors[hash % colors.Length]);
+    }
     private static IBrush B(string color) => Brush.Parse(color);
 }

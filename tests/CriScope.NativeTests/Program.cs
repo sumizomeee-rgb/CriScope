@@ -42,6 +42,17 @@ legacy.raw="{";Check(!EventSemantics.IsPlaybackEnd(legacy)&&EventSemantics.Cause
 Check(EventSemantics.IsPlaybackReleased(new(){entity="cue",detail="CRI 播放实例释放"}),"Legacy release no longer supported");
 Console.WriteLine("PASS structured cue lifecycle, limit cause, stopped/released distinction and legacy evidence compatibility");
 
+var categoryMapper=new NativeEventMapper("category-test");
+categoryMapper.Map(P("StartLogging",1000000)).ToArray();
+categoryMapper.Map(P("ExCategoryConfig",1000000,N("Index",23),N("CategoryName","Music"))).ToArray();
+var category=categoryMapper.Map(P("ExCategory_IncrementNumPlaybackCues",1200000,N("Index",23),N("ExPlaybackId_unique64",167UL))).Single();
+Check(category.kind=="category"&&category.name=="Music"&&category.parentId=="playback:1:167","Category needs explicit playback and index/name mapping");
+var unknownCategory=categoryMapper.Map(P("ExCategory_IncrementNumPlaybackCues",1300000,N("Index",1),N("ExPlaybackId_unique64",167UL))).Single();
+Check(unknownCategory.name=="Category 索引 1","Unknown category must not borrow another name");
+categoryMapper.Map(P("StartLogging",2000000)).ToArray();
+var resetCategory=categoryMapper.Map(P("ExCategory_IncrementNumPlaybackCues",2100000,N("Index",23),N("ExPlaybackId_unique64",167UL))).Single();
+Check(resetCategory.name=="Category 索引 23"&&resetCategory.parentId=="playback:2:167","Category names must not leak across captures");
+Console.WriteLine("PASS native category identity, unknown-name fallback and segment reset");
 int fixtures = 0;
 foreach (var path in args)
 {

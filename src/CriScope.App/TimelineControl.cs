@@ -37,11 +37,52 @@ public sealed class TimelineControl : Control
     }
     public string Mode { get; set; } = "Timeline";
     public event Action<WireEvent>? EventSelected;
+    public event Action<WireEvent>? PlaybackRequested;
     public event Action? SelectionCleared;
     public event Action? ViewChanged;
     public double? SelectionStart { get; private set; }
     public double? SelectionEnd { get; private set; }
     public void SetSelection(double? start, double? end) { SelectionStart=start; SelectionEnd=end; InvalidateVisual(); }
+    private DateTime _flashUntil;
+    public string SpatialFocusId { get; set; } = "";
+    private readonly List<(Rect Rect, WireEvent Event)> _links = [];
+    public double VerticalOffset { get => _vertical; set => _vertical = Math.Max(0, value); }
+    public string[] ExpandedKeys { get => _expanded.ToArray(); set { _expanded.Clear(); foreach(var key in value) _expanded.Add(key); } }
+    public void FocusEvent(WireEvent item)
+    {
+        Selected = item; _flashUntil = DateTime.UtcNow.AddSeconds(1.2); _vertical = 0;
+        if(Mode == "Timeline")
+        {
+            var id = item.entity == "voice" ? item.parentId : item.objectId;
+            foreach(var group in PlaybackGroups().Where(g => g.End == null || g.End.time >= Start))
+            {
+                if(group.Id == id) { if(item.entity == "voice") _expanded.Add("playback:" + id); break; }
+                _vertical += 54 + (_expanded.Contains("playback:"+group.Id) ? Math.Max(1,group.Voices.Count(v=>v.LastOrDefault(e=>e.kind=="stop") is not {} stop || stop.time>=Start))*38 : 0);
+            }
+        }
+        else if(Mode == "AISAC")
+        {
+            foreach(var group in ControlRows())
+            {
+                if(group.Rows.Any(r=>r.Records.Any(e=>e.session==item.session && e.seq==item.seq))) { _expanded.Add(group.Key); break; }
+                _vertical += 40 + (_expanded.Contains(group.Key) ? group.Rows.Sum(r=>r.TargetLabel.Length>0?62:46) : 0);
+            }
+        }
+        else if(Mode == "Location")
+        {
+            SpatialFocusId=item.objectId;
+            ShowSources = true;
+            var cluster = SpatialPresentation.Group(Events,End,ShowBaseListeners,true,ShowDistanceListeners).FirstOrDefault(g=>g.Items.Any(e=>e.objectId==item.objectId));
+            foreach(var key in _expanded.Where(k=>k.StartsWith("spatial:")).ToArray()) _expanded.Remove(key);
+            if(cluster is { Items.Length: > 1 }) { _expanded.Add(cluster.Key); _vertical = Math.Max(0,Array.FindIndex(cluster.Items,e=>e.objectId==item.objectId)*34-34); }
+        }
+        InvalidateVisual();
+    }
+    private void Highlight(DrawingContext c, Rect rect)
+    {
+        c.FillRectangle(Palette.Hover, rect);
+        c.DrawRectangle(null, new Pen(Palette.Selection, DateTime.UtcNow < _flashUntil ? 2.5 : 1), rect, 3, 3);
+    }
     private Point? _drag;
     private double _dragEnd, _vertical, _contentHeight;
     private bool _panning, _space, _scrollDragging;
@@ -109,6 +150,7 @@ public sealed class TimelineControl : Control
         };
         PointerPressed += (_,e) => {
             Focus();var p=e.GetPosition(this);
+            var link = _links.LastOrDefault(h=>h.Rect.Contains(p)); if(link.Event!=null){PlaybackRequested?.Invoke(link.Event);e.Handled=true;return;}
             var toggle=_toggleHits.LastOrDefault(h=>h.rect.Contains(p));
             if(toggle.key!=null)
             {
@@ -158,11 +200,11 @@ public sealed class TimelineControl : Control
     {Text(c,title,26,105,Palette.Text,18);Text(c,description,26,141,size:12);}
     public override void Render(DrawingContext c)
     {
-        base.Render(c);c.FillRectangle(Palette.Canvas,new Rect(Bounds.Size));_hits.Clear();_expandHits.Clear();_toggleHits.Clear();_spatialHits.Clear();
+        base.Render(c);c.FillRectangle(Palette.Canvas,new Rect(Bounds.Size));_links.Clear();_hits.Clear();_expandHits.Clear();_toggleHits.Clear();_spatialHits.Clear();
         if(Events.Length==0&&SupplementMetrics.Length==0){Empty(c,"等待音频观测","在游戏里开启 CriScope 采集，或打开已有日志。");return;}
         if(Mode=="Location"){DrawLocations(c);return;}if(Mode=="Mixing"){DrawMixing(c);DrawScrollHint(c);return;}
         double step=Math.Pow(10,Math.Floor(Math.Log10(Span/8)));if(Span/step>16)step*=5;else if(Span/step>10)step*=2;
-        for(double t=TimeOrigin+Math.Ceiling((Start-TimeOrigin)/step)*step;t<=End;t+=step){var x=X(t);c.DrawLine(new Pen(Palette.Border,.5),new Point(x,31),new Point(x,Bounds.Height-28));Text(c,Stamp(t),x+4,10,size:10);}
+        for(double t=Math.Max(TimeOrigin,TimeOrigin+Math.Ceiling((Start-TimeOrigin)/step)*step);t<=End;t+=step){var x=X(t);c.DrawLine(new Pen(Palette.Border,.5),new Point(x,31),new Point(x,Bounds.Height-28));Text(c,Stamp(t),x+4,10,size:10);}
         Text(c,"距本次采集开始",12,10,size:10);c.DrawLine(new Pen(Palette.Border),new Point(0,34),new Point(Bounds.Width,34));
         if(Mode=="AISAC")DrawControls(c);else if(Mode=="Performance")DrawResources(c);else DrawTracks(c);
         if(SelectionStart is {} a&&SelectionEnd is {} b&&Math.Abs(a-b)>.000001){var l=Math.Clamp(X(Math.Min(a,b)),LabelWidth,LabelWidth+PlotWidth);var r=Math.Clamp(X(Math.Max(a,b)),LabelWidth,LabelWidth+PlotWidth);c.DrawRectangle(null,new Pen(Palette.Selection,1.5),new Rect(l,35,Math.Max(0,r-l),Math.Max(0,Bounds.Height-64)));}
@@ -188,6 +230,8 @@ public sealed class TimelineControl : Control
             double h=54+(expanded?Math.Max(1,voiceRows.Length)*38:0);
             if(!VisibleRow(y,h)){y+=h;row+=1+(expanded?Math.Max(1,voiceRows.Length):0);continue;}
             if(row++%2==0)c.FillRectangle(Palette.Alternate,new Rect(0,y,Bounds.Width,54));
+            var selectedId = Selected?.entity == "voice" ? Selected.parentId : Selected?.objectId;
+            if(selectedId == group.Id) Highlight(c,new Rect(1,y+1,Bounds.Width-22,52));
             RowName(c,(expanded?"− ":"+ ")+group.Name,y+3);
             var status=!SourceConnected&&group.ActiveVoiceCount>0?"已断开 · 保留最后状态":group.StatusLabel;
             using(c.PushClip(new Rect(27,y+18,LabelWidth-37,35)))
@@ -195,7 +239,8 @@ public sealed class TimelineControl : Control
                 Text(c,status+" · "+group.Voices.Length+" Voice",27,y+20,group.ActiveVoiceCount>0&&SourceConnected?Palette.Good:Palette.Muted,10);
                 var duration=group.DurationAt(End);
                 var durationText=duration is {} elapsed?(group.EndedAt!=null?"持续 ":"已持续 ")+elapsed.ToString("0.000",CultureInfo.InvariantCulture)+" 秒":"";
-                Text(c,durationText,27,y+37,size:9);
+                var categories = AssociationPresentation.Categories(Events,group.Id,End);
+                Text(c,durationText + (categories.Length>0 ? " · " + string.Join(" / ",categories.Select(e=>e.name)) : ""),27,y+37,size:9);
             }
             var beginLabel=group.StartedAt is {} began?"+"+Stamp(began):"";
             var endedLabel=group.EndedAt??group.InstanceEndedAt;
@@ -259,7 +304,7 @@ public sealed class TimelineControl : Control
         {
             var width=kind=="sequence"?112:kind=="selector"?104:kind=="aisac"?90:kind=="beat"?104:82;
             if(chipX+width>Bounds.Width-12){chipX=12;chipY+=31;}
-            DrawToggle(c,new Rect(chipX,chipY,width,25),ControlPresentation.KindLabel(kind),ControlKinds.Contains(kind),"control:"+kind,kind=="aisac"?Palette.Selection:kind is "beat" or "sequence"?Palette.Good:Palette.Request);
+            DrawToggle(c,new Rect(chipX,chipY,width,25),ControlPresentation.KindLabel(kind),ControlKinds.Contains(kind),"control:"+kind,Palette.Control(kind));
             chipX+=width+7;
         }
         if(chipX+215<Bounds.Width)Text(c,"可多选 · 展开看对象 · 点击子行看记录",chipX+8,chipY+6,size:10);
@@ -272,37 +317,54 @@ public sealed class TimelineControl : Control
         {
             bool expanded=_expanded.Contains(group.Key);
             bool compact=PlotWidth<400;
-            double rowHeight=compact?66:52;
-            double height=48+(expanded?group.Rows.Length*rowHeight:0);
+            double height=40+(expanded?group.Rows.Sum(r=>r.TargetLabel.Length>0?62:46):0);
             if(!VisibleRow(y,height,contentTop-5)){y+=height;continue;}
-            c.FillRectangle(Palette.Alternate,new Rect(0,y,Bounds.Width,48));
-            using(c.PushClip(new Rect(12,y+1,Math.Max(0,Bounds.Width-36),45)))
+            c.FillRectangle(Palette.Alternate,new Rect(0,y,Bounds.Width,40));
+            using(c.PushClip(new Rect(12,y+1,Math.Max(0,Bounds.Width-36),38)))
             {
-                Text(c,(expanded?"− ":"+ ")+group.Name,12,y+4,Palette.Text,12);
-                Text(c,group.Summary,27,y+26,Palette.Muted,10);
+                Text(c,(expanded?"− ":"+ ")+group.Name,12,y+3,group.Rows.Select(r=>r.Kind).Distinct().Count()==1?Palette.Control(group.Rows[0].Kind):Palette.Text,12);
+                Text(c,group.Summary,27,y+22,Palette.Muted,10);
             }
-            _expandHits.Add((new Rect(0,y,Math.Max(0,Bounds.Width-20),48),group.Key));
-            y+=48;
+            _expandHits.Add((new Rect(0,y,Math.Max(0,Bounds.Width-20),40),group.Key));
+            y+=40;
             if(!expanded)continue;
             foreach(var row in group.Rows)
             {
+                double rowHeight=row.TargetLabel.Length>0?62:46;
                 if(!VisibleRow(y,rowHeight,contentTop-5)){y+=rowHeight;continue;}
                 var last=row.Latest;var samples=row.Records.Where(e=>e.time>=Start).ToArray();
-                var brush=last.kind=="aisac"?Palette.Selection:last.kind is "beat" or "sequence"?Palette.Good:Palette.Request;
+                var brush=Palette.Control(last.kind);
                 if(i++%2==0)c.FillRectangle(Palette.Panel,new Rect(0,y,Bounds.Width,rowHeight));
+                if(Selected is {} selected && row.Records.Any(e=>e.seq==selected.seq&&e.session==selected.session)) Highlight(c,new Rect(24,y+1,Bounds.Width-46,rowHeight-2));
                 using(c.PushClip(new Rect(26,y+1,LabelWidth-32,rowHeight)))
                 {
                     Text(c,row.Name,28,y+4,brush,12);
-                    Text(c,$"{row.Records.Length} 条记录 · 点击查看",28,y+27,size:10);
+                    Text(c,$"{row.Records.Length} 条记录",28,y+25,size:10);
                 }
-                using(c.PushClip(new Rect(LabelWidth+8,y+1,Math.Max(0,compact?PlotWidth-16:PlotWidth-220),25)))
+                if(row.TargetLabel.Length>0)
+                {
+                    double chip=LabelWidth+10;
+                    var owners=PlaybackGroups().Where(p=>p.PlayerId==last.objectId&&AssociationPresentation.ActiveAt(p,End)).ToArray();
+                    using var chipClip=c.PushClip(new Rect(LabelWidth,y+23,PlotWidth,18));
+                    foreach(var owner in owners)
+                    {
+                        var caption=owner.Name+" · "+(owner.RequestAt is {} at?Stamp(at):"开始未记录");
+                        double width=Math.Min(240,caption.Length*6.5+18);
+                        if(chip+width>Bounds.Width-24){Text(c,"…",chip,y+24,Palette.Voice);break;}
+                        c.DrawRectangle(null,new Pen(Palette.Border),new Rect(chip,y+23,width,18),3,3);
+                        using(c.PushClip(new Rect(chip+5,y+23,width-10,18))) Text(c,caption,chip+5,y+24,Palette.Voice,10);
+                        if(AssociationPresentation.Anchor(owner) is {} ownerEvent) _links.Add((new Rect(chip,y+23,width,18),ownerEvent));
+                        chip+=width+6;
+                    }
+                }
+                using(c.PushClip(new Rect(LabelWidth+8,y+1,Math.Max(0,compact?PlotWidth-16:PlotWidth-220),22)))
                     Text(c,(last.kind is "aisac" or "selector"?"最近设置：":"最近记录：")+ControlPresentation.Value(last),LabelWidth+10,y+5,Palette.Text,12);
-                Text(c,(last.estimatedTime?"约 +":"+")+Stamp(last.time),compact?LabelWidth+10:Math.Max(LabelWidth+180,Bounds.Width-202),y+(compact?25:6),size:10);
+                Text(c,(last.estimatedTime?"约 +":"+")+Stamp(last.time),compact?LabelWidth+10:Math.Max(LabelWidth+180,Bounds.Width-202),y+6,size:10);
                 _hits.Add((new Rect(24,y,Math.Max(0,Bounds.Width-44),rowHeight),last));
                 // Discrete settings and callbacks; no interpolated curve or mixed parent value.
                 foreach(var e in samples)
                 {
-                    var x=X(e.time);c.DrawEllipse(e.estimatedTime?null:brush,e.estimatedTime?new Pen(brush,1.3):null,new Point(x,y+rowHeight-11),3,3);
+                    var x=X(e.time);var pointBrush=e.kind=="sequence"?Palette.SequenceTag(e.name):brush;c.DrawEllipse(e.estimatedTime?null:pointBrush,e.estimatedTime?new Pen(pointBrush,1.3):null,new Point(x,y+rowHeight-7),3,3);
                     _hits.Add((new Rect(x-5,y+rowHeight-20,10,20),e));
                 }
                 if(samples.Length==0)Text(c,"此时间窗无新记录",LabelWidth+10,y+rowHeight-19,size:10);
@@ -427,6 +489,7 @@ public sealed class TimelineControl : Control
         Text(c,ShowDistanceListeners&&!hasListener?"衰减监听点尚未收到完整参数":$"{positions.Count(e=>e.entity=="source")} 个音源 · {positions.Count(e=>e.entity!="source")} 个监听点 · 监听点始终置顶",22,85,ShowDistanceListeners&&!hasListener?Palette.Request:Palette.Muted);
         double cx=(positions.Min(e=>e.x)+positions.Max(e=>e.x))/2,cz=(positions.Min(e=>e.z)+positions.Max(e=>e.z))/2;
         var extent=Math.Max(2,positions.Max(e=>Math.Max(Math.Abs(e.x-cx),Math.Abs(e.z-cz))))*1.25;
+        if(positions.FirstOrDefault(e=>e.objectId==SpatialFocusId) is {} focus) {cx=focus.x;cz=focus.z;}
         var center=new Point(Bounds.Width/2,(Bounds.Height+100)/2);
         var scale=Math.Max(1,Math.Min(Bounds.Width-200,Bounds.Height-190))/(2*extent);
         for(int i=-2;i<=2;i++){var x=center.X+i*extent*scale/2;var z=center.Y+i*extent*scale/2;c.DrawLine(new Pen(Palette.Border,.7),new Point(x,115),new Point(x,Bounds.Height-30));c.DrawLine(new Pen(Palette.Border,.7),new Point(40,z),new Point(Bounds.Width-30,z));}
@@ -454,6 +517,7 @@ public sealed class TimelineControl : Control
             c.DrawLine(new Pen(brush,.8),anchor,new Point(left,top+23));
             c.DrawEllipse(Palette.Canvas,new Pen(brush,1.2),anchor,3,3);
             c.FillRectangle(Palette.Panel,label);
+            if(Selected is {} selected && cluster.Items.Any(item=>item.objectId==selected.objectId && item.entity==selected.entity)) { Highlight(c,label); c.DrawEllipse(null,new Pen(Palette.Selection,2),anchor,8,8); }
             if(listener)c.DrawRectangle(null,new Pen(Palette.Listener,.8),label,3,3);
             DrawSpatialIcon(c,p,listener);
             using(var labelClip=c.PushClip(new Rect(left+32,top+3,labelWidth-38,40)))
@@ -475,6 +539,7 @@ public sealed class TimelineControl : Control
                 var item=cluster.Items[i];var y=top+40+i*34-_vertical;
                 if(!VisibleRow(y,34,top+38))continue;
                 if(i%2==0)c.FillRectangle(Palette.Alternate,new Rect(left,y,280,34));
+                if(Selected?.objectId==item.objectId) Highlight(c,new Rect(left+1,y+1,278,32));
                 Text(c,item.name,left+12,y+3,Palette.Text,11);
                 Text(c,$"对象 {i+1} · Y {item.y:0.##}",left+12,y+19,size:9);
                 var hitTop=Math.Max(y,top+38);var hitBottom=Math.Min(y+34,Bounds.Height-30);

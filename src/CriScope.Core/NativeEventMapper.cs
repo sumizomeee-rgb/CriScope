@@ -6,6 +6,7 @@ namespace CriScope.Core;
 /// <summary>Maps native evidence without equating cue requests with allocated sound voices.</summary>
 public sealed class NativeEventMapper(string session)
 {
+    private readonly Dictionary<string, string> categoryNames = new();
     private long sequence;
     private ulong captureStart;
     private double lastTime;
@@ -40,7 +41,7 @@ public sealed class NativeEventMapper(string session)
         {
             captureStart = packet.TimeMicroseconds;
             segment++;
-            playbacks.Clear(); playerCues.Clear(); voices.Clear(); positions.Clear(); spatialState.Clear();
+            categoryNames.Clear(); playbacks.Clear(); playerCues.Clear(); voices.Clear(); positions.Clear(); spatialState.Clear();
             listeners.Clear(); voiceSources.Clear(); positionTimes.Clear(); positionEvidence.Clear();
         }
         double time = Math.Max(captureStart, packet.TimeMicroseconds) / 1_000_000d;
@@ -199,10 +200,21 @@ public sealed class NativeEventMapper(string session)
             yield return ev;
             playbacks.Remove(playback); yield break;
         }
+        if (f == "ExCategoryConfig" && Has("Index"))
+        {
+            var index = S("Index"); categoryNames[index] = S("CategoryName");
+            yield return E("category-info", S("CategoryName"), "category-index:" + index, entity: "category", detail: "原生 Category 配置"); yield break;
+        }
+        if (f == "ExCategory_IncrementNumPlaybackCues" && Has("Index") && (Has("ExPlaybackId_unique64") || Has("CriAtomExPlaybackId")))
+        {
+            var index = S("Index");
+            yield return E("category", categoryNames.GetValueOrDefault(index, "Category 索引 " + index),
+                "category-index:" + index, entity: "category", parent: playback, detail: "原生播放归属"); yield break;
+        }
         if (f.Contains("Aisac", StringComparison.Ordinal) && Has("AisacControlValue"))
         {
             yield return E("aisac", Has("AisacControlName") ? S("AisacControlName") : "AISAC " + S("AisacControlId"),
-                player.Length > 0 ? player : "category:" + S("category_id"), N("AisacControlValue"), "control", detail: "当前收到的控制值"); yield break;
+                player.Length > 0 ? player : "category:" + (Has("CategoryId") ? S("CategoryId") : S("CategoryName")), N("AisacControlValue"), "control", detail: "当前收到的控制值"); yield break;
         }
         if (f.Contains("Selector", StringComparison.Ordinal))
         {
