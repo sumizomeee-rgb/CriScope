@@ -1,9 +1,28 @@
 using CriScope.Core;
+using Avalonia;
 namespace CriScope.App;
 
 public sealed record SpatialCluster(string Key, string Entity, WireEvent[] Items);
 public static class SpatialPresentation
 {
+    // Labels may move; measured anchors never do. No room means marker-only, never an overlapping card.
+    public static Rect? PlaceLabel(Point anchor, double width, Rect area, IReadOnlyList<Rect> occupied)
+    {
+        double left=Math.Clamp(anchor.X+22,area.Left,Math.Max(area.Left,area.Right-width));
+        double top=Math.Clamp(anchor.Y-23,area.Top,Math.Max(area.Top,area.Bottom-46));
+        var xs=new[]{left,Math.Clamp(anchor.X-width-22,area.Left,Math.Max(area.Left,area.Right-width)),area.Left};
+        for(int step=0;step<=Math.Ceiling(area.Height/50);step++)
+        foreach(var direction in step==0?new[]{1}:new[]{1,-1})
+        foreach(var x in xs)
+        {
+            var y=top+step*50*direction;
+            if(y<area.Top||y+46>area.Bottom)continue;
+            var candidate=new Rect(x,y,width,46);
+            if(!occupied.Any(rect=>rect.Inflate(2).Intersects(candidate)))return candidate;
+        }
+        return null;
+    }
+
     public static SpatialCluster[] Group(IEnumerable<WireEvent> events, double end, bool showBaseListeners = false, bool showSources = true, bool showDistanceListeners = true)
     {
         var available = events.Where(e => e.time <= end).ToArray();

@@ -14,6 +14,7 @@ public sealed partial class MainWindow
     private WireEvent? _filterException;
     private double ContextTime => _selected is { } e && (ControlPresentation.Kinds.Contains(e.kind) || _mode == "Logs") ? e.time : _timeline.End;
 
+    private string PlaybackLabel(PlaybackGroup playback) => playback.Name+" · "+_timeline.ControlLabels.Get("播放实例",System.Text.Json.JsonSerializer.Serialize(new[]{playback.Request?.session??playback.Voices.SelectMany(v=>v).FirstOrDefault()?.session??"",playback.Id}));
     private void RememberPosition()
     {
         SaveView();
@@ -74,11 +75,7 @@ public sealed partial class MainWindow
             var playerLabel = _timeline.ControlLabels.Get("Player", System.Text.Json.JsonSerializer.Serialize(new[] { playback.Request?.session ?? "", playback.PlayerId }));
             if(playback.PlayerId.Length>0) links.Children.Add(Label(playerLabel + " · 关联控制",11,_p.Muted));
             var controls = PlaybackPresentation.ControlsFor(playback, _snapshot, _timeline.End);
-            foreach(var category in AssociationPresentation.Categories(_snapshot,playback.Id,_timeline.End))
-            {
-                var b = Action("Category · " + category.name, () => FilterCategory(category)); b.Tag="category-filter:"+category.objectId;
-                ToolTip.SetTip(b,"筛选此 Category 的声音轨道"); links.Children.Add(b);
-            }
+
         }
         if(selected.kind != "position")
         {

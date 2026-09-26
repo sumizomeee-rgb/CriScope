@@ -32,8 +32,8 @@ lifecycleMapper.Map(P("StartLogging",1000000)).ToArray();
 var requested=lifecycleMapper.Map(P("ExPlaybackId",1100000,N("ExPlaybackId_unique64",167UL),N("CriAtomExPlayerHn","0x1"),N("cue_name","Fixture"))).Single();
 Check(requested.lifecycle=="created","Cue creation lacks structured lifecycle");
 var limited=lifecycleMapper.Map(P("ExCue_StopByLimit",1200000,N("ExPlaybackId_unique64",167UL),N("cause ExPlaybackId_unique64",168UL),N("VoiceStopReason",54))).Single();
-Check(limited.kind=="stop"&&limited.entity=="cue"&&limited.lifecycle=="stopped"&&limited.endReason=="playback-limit"&&limited.causeId=="playback:1:168","Playback limit lost structured reason/cause");
-Check(EventSemantics.IsPlaybackEnd(limited)&&!EventSemantics.IsPlaybackReleased(limited),"Stop must not masquerade as release");
+Check(limited.kind=="stop-request"&&limited.entity=="cue"&&limited.lifecycle=="stop-requested"&&limited.endReason=="playback-limit"&&limited.causeId=="playback:1:168","Playback limit lost structured reason/cause");
+Check(!EventSemantics.IsPlaybackEnd(limited)&&!EventSemantics.IsPlaybackReleased(limited),"Stop request must not masquerade as actual end/release");
 var released=lifecycleMapper.Map(P("ExPlaybackInfo_FreeInfo",1300000,N("ExPlaybackId_unique64",167UL))).Single();
 Check(released.name=="Fixture"&&EventSemantics.IsPlaybackReleased(released),"Release loses the stopped instance identity");
 var legacy=new WireEvent{kind="log",name="ExCue_StopByLimit",objectId="9:playback:1:167",raw=limited.raw};
@@ -53,6 +53,31 @@ categoryMapper.Map(P("StartLogging",2000000)).ToArray();
 var resetCategory=categoryMapper.Map(P("ExCategory_IncrementNumPlaybackCues",2100000,N("Index",23),N("ExPlaybackId_unique64",167UL))).Single();
 Check(resetCategory.name=="Category 索引 23"&&resetCategory.parentId=="playback:2:167","Category names must not leak across captures");
 Console.WriteLine("PASS native category identity, unknown-name fallback and segment reset");
+var stopMapper=new NativeEventMapper("stop-test");
+stopMapper.Map(P("StartLogging",1,N("VersionString","2.28.272-0.5"))).ToArray();
+WireEvent[] StopMap(string f,ulong time,params NativeParameter[] parameters)=>stopMapper.Map(P(f,time,parameters)).ToArray();
+StopMap("ExPlaybackId",2,N("ExPlaybackId_unique64",1UL),N("CriAtomExPlayerHn","p"),N("cue_name","same"));
+StopMap("ExPlaybackId",3,N("ExPlaybackId_unique64",2UL),N("CriAtomExPlayerHn","p"),N("cue_name","same"));
+StopMap("ExPlaybackId",4,N("ExPlaybackId_unique64",3UL),N("CriAtomExPlayerHn","other"),N("cue_name","same"));
+var exactStop=StopMap("ExPlayback_Stop",5,N("ExPlaybackId_unique64",1UL)).Single();
+Check(exactStop.objectId=="playback:1:1"&&exactStop.kind=="stop-request"&&exactStop.endReason=="playback-stop"&&!EventSemantics.IsPlaybackEnd(exactStop),"Playback stop must target unique identity without ending it");
+var playerStops=StopMap("ExPlayer_StopWithoutReleaseTime",6,N("CriAtomExPlayerHn","p"));
+Check(playerStops.Length==2&&playerStops.All(e=>e.kind=="stop-request"&&e.endReason=="player-stop-immediate")&&playerStops.All(e=>e.objectId!="playback:1:3"),"Player stop guessed target from Cue name or stopped wrong player");
+foreach(var (numeric,reason) in new[]{(0,"player-stop"),(1,"player-stop-immediate"),(2,"playback-stop"),(3,"playback-stop-immediate"),(22,"natural"),(54,"playback-limit"),(999,"")})
+{
+    var end=StopMap("SoundVoice_FreeVoice",7,N("CriAtomSoundVoiceId_unique64",(ulong)numeric+100),N("ExPlaybackId_unique64",(ulong)numeric+100),N("VoiceStopReason",numeric)).Single();
+    Check(end.endReason==reason&&end.raw.Contains("VoiceStopReason"),"Verified stop reason mapping/raw lost");
+    var release=StopMap("ExPlaybackInfo_FreeInfo",8,N("ExPlaybackId_unique64",(ulong)numeric+100)).Single();
+    Check(release.endReason==reason&&EventSemantics.IsPlaybackReleased(release),"Instance reason consensus lost");
+}
+StopMap("SoundVoice_FreeVoice",9,N("CriAtomSoundVoiceId_unique64",501UL),N("ExPlaybackId_unique64",1UL),N("VoiceStopReason",22));
+StopMap("SoundVoice_FreeVoice",10,N("CriAtomSoundVoiceId_unique64",502UL),N("ExPlaybackId_unique64",1UL),N("VoiceStopReason",2));
+Check(StopMap("ExPlaybackInfo_FreeInfo",11,N("ExPlaybackId_unique64",1UL)).Single().endReason=="","Mixed Voice reasons fabricated a single instance reason");
+Check(StopMap("ExPlayer_Stop",12,N("CriAtomExPlayerHn","p")).Single().objectId=="playback:1:2","Released playback still targeted by Player Stop");
+StopMap("StartLogging",13,N("VersionString","unverified"));
+Check(StopMap("SoundVoice_FreeVoice",14,N("CriAtomSoundVoiceId_unique64",1UL),N("ExPlaybackId_unique64",1UL),N("VoiceStopReason",22)).Single().endReason=="","Numeric reason generalized to unverified SDK");
+Check(StopMap("ExPlayer_Stop",15,N("CriAtomExPlayerHn","p")).Single().kind=="log","Player identity leaked across capture epochs");
+Console.WriteLine("PASS exact playback/player Stop requests, all verified reasons, mixed Voice consensus, version boundary and reset");
 int fixtures = 0;
 foreach (var path in args)
 {

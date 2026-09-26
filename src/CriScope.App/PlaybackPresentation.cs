@@ -23,11 +23,17 @@ public sealed record PlaybackGroup(string Id, WireEvent? Request, WireEvent? End
     public double? EndedAt => VoiceIntervals.Length > 0 && VoiceIntervals.All(v => v.End != null) ? VoiceIntervals.Max(v => v.End!.time) : null;
     public double? InstanceEndedAt => End?.time;
     public double? InstanceReleasedAt => ReleaseEvidence?.time;
-    public string EndReason => StopEvidence == null ? "" : EventSemantics.EndReason(StopEvidence);
+    public string EndReason => StopEvidence != null ? EventSemantics.EndReason(StopEvidence) :
+        End != null && Voices.SelectMany(v=>v).Where(e=>e.kind=="stop").Select(e=>e.endReason).Distinct().ToArray() is {Length:1} reasons ? reasons[0] : "";
+    public double? StopRequestedAt => StopEvidence?.kind == "stop-request" ? StopEvidence.time : null;
+    public string EndReasonLabel => ReasonLabel(EndReason);
+    public static string ReasonLabel(string reason) => reason switch {
+        "natural" => "自然结束", "playback-stop" => "主动停止此实例", "playback-stop-immediate" => "立即停止此实例",
+        "player-stop" => "播放器主动停止", "player-stop-immediate" => "播放器立即停止", "playback-limit" => "播放数量限制", _ => "未确认" };
     public string CausePlaybackId => StopEvidence == null ? "" : EventSemantics.CauseId(StopEvidence);
     public int ActiveVoiceCount => End != null || HasEvidenceGap ? 0 : VoiceIntervals.Count(v => v.Begin.kind == "play" && v.End == null);
-    public string StatusLabel => EndReason == "playback-limit" ? "数量限制终止" : End != null ? (VoiceIntervals.Length == 0 ? Request == null || HasEvidenceGap ? "已结束 · Voice 记录不完整" : "未分配 Voice · 已结束" : "已结束")
-        : HasEvidenceGap ? "采集中断 · 状态待确认" : ActiveVoiceCount > 0 ? "播放中"
+    public string StatusLabel => EndReason == "playback-limit" && End != null ? "数量限制终止" : End != null ? (VoiceIntervals.Length == 0 ? Request == null || HasEvidenceGap ? "已结束 · Voice 记录不完整" : "未分配 Voice · 已结束" : "已结束")
+        : HasEvidenceGap ? "采集中断 · 状态待确认" : ActiveVoiceCount > 0 ? StopRequestedAt != null ? "停止中" : "播放中"
         : VoiceIntervals.Length > 0 ? "声部已结束 · 实例待结束" : "等待 Voice 分配";
     public double? DurationAt(double end)
     {
@@ -58,7 +64,7 @@ public static class PlaybackPresentation
     public static PlaybackGroup[] Group(IEnumerable<WireEvent> events, double end)
     {
         var source = events.Where(e => e.time <= end && (e.kind == "request" && e.entity == "cue"
-            || e.entity == "voice" && e.kind is "play" or "stop" || e.kind == "gap" || e.entity == "capture-segment" || EventSemantics.IsPlaybackEnd(e)))
+            || e.entity == "voice" && e.kind is "play" or "stop" || e.kind == "stop-request" || e.kind == "gap" || e.entity == "capture-segment" || EventSemantics.IsPlaybackEnd(e)))
             .OrderBy(e => e.time).ThenBy(e => e.seq).ToArray();
         var requests = source.Where(e => e.kind == "request" && e.entity == "cue").GroupBy(e => e.objectId).ToDictionary(g => g.Key, g => g.First());
         var endings = source.Where(EventSemantics.IsPlaybackEnd).GroupBy(e => e.objectId).ToDictionary(g => g.Key, g => g.ToArray());
@@ -78,7 +84,7 @@ public static class PlaybackPresentation
             return new PlaybackGroup(id, request, ending, groupVoices)
             {
                 ObservedThrough = end,
-                StopEvidence = ends.FirstOrDefault(e => EventSemantics.EndReason(e).Length > 0),
+                StopEvidence = source.FirstOrDefault(e => e.objectId == id && e.kind == "stop-request") ?? ends.FirstOrDefault(e => EventSemantics.EndReason(e).Length > 0),
                 ReleaseEvidence = ends.LastOrDefault(EventSemantics.IsPlaybackReleased),
                 Discontinuity = gap
             };

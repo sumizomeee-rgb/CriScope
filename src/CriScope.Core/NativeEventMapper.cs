@@ -7,6 +7,12 @@ namespace CriScope.Core;
 public sealed class NativeEventMapper(string session)
 {
     private readonly Dictionary<string, string> categoryNames = new();
+    // Numeric stop reasons and pre-commit Update snapshots are verified for this SDK only.
+    private const string VerifiedSdkVersion = "2.28.272-0.5";
+    private bool verifiedSdk;
+    private readonly HashSet<string> pendingSpatialResets = new();
+    private readonly Dictionary<string, HashSet<string>> playbackEndReasons = new();
+    private readonly Dictionary<string, Dictionary<string, (object Value, ulong Time)>> pendingSpatial = new();
     private long sequence;
     private ulong captureStart;
     private double lastTime;
@@ -39,10 +45,11 @@ public sealed class NativeEventMapper(string session)
         string f = packet.Function;
         if (f == "StartLogging")
         {
+            verifiedSdk = S("VersionString") == VerifiedSdkVersion;
             captureStart = packet.TimeMicroseconds;
             segment++;
             categoryNames.Clear(); playbacks.Clear(); playerCues.Clear(); voices.Clear(); positions.Clear(); spatialState.Clear();
-            listeners.Clear(); voiceSources.Clear(); positionTimes.Clear(); positionEvidence.Clear();
+            listeners.Clear(); pendingSpatial.Clear(); pendingSpatialResets.Clear(); playbackEndReasons.Clear(); voiceSources.Clear(); positionTimes.Clear(); positionEvidence.Clear();
         }
         double time = Math.Max(captureStart, packet.TimeMicroseconds) / 1_000_000d;
         lastTime = Math.Max(lastTime, time);
@@ -92,26 +99,71 @@ public sealed class NativeEventMapper(string session)
         {
             bool listener = f.Contains("Listener", StringComparison.Ordinal);
             string spatialId = S(listener ? "CriAtomEx3dListenerHn" : "CriAtomEx3dSourceHn");
-            if (f.EndsWith("_Destroy", StringComparison.Ordinal))
+            if (f.EndsWith("_ResetParameters", StringComparison.Ordinal))
             {
-                positions.Remove(spatialId); positionTimes.Remove(spatialId); positionEvidence.Remove(spatialId); listeners.Remove(spatialId);
-                foreach (var key in spatialState.Keys.Where(k => k.StartsWith(spatialId + "/", StringComparison.Ordinal)).ToArray()) spatialState.Remove(key);
-                foreach (var key in voiceSources.Where(v => v.Value == spatialId).Select(v => v.Key).ToArray()) voiceSources.Remove(key);
-                yield return E("remove", listener ? "Listener 已销毁" : "音源已销毁", spatialId, entity: listener ? "listener" : "source", detail: "原生对象销毁");
-                if (listener) yield return E("remove", "衰减监听点已移除", spatialId, entity: "distance-listener", detail: "所属 Listener 已销毁");
+                pendingSpatial.Remove(spatialId); pendingSpatialResets.Add(spatialId);
+                yield return E("log", f, spatialId, entity: listener ? "listener" : "source", detail: "空间参数重置请求；等待 Update 提交");
                 yield break;
             }
-            if (listener && spatialId.Length > 0)
+            if (f.EndsWith("_Destroy", StringComparison.Ordinal) || f.EndsWith("_Create", StringComparison.Ordinal))
             {
-                if (!listeners.TryGetValue(spatialId, out var state)) listeners[spatialId] = state = new();
+                positions.Remove(spatialId); positionTimes.Remove(spatialId); positionEvidence.Remove(spatialId); listeners.Remove(spatialId); pendingSpatial.Remove(spatialId); pendingSpatialResets.Remove(spatialId);
+                foreach (var key in spatialState.Keys.Where(k => k.StartsWith(spatialId + "/", StringComparison.Ordinal)).ToArray()) spatialState.Remove(key);
+                foreach (var key in voiceSources.Where(v => v.Value == spatialId).Select(v => v.Key).ToArray()) voiceSources.Remove(key);
+                yield return E("remove", listener ? "Listener 状态已清除" : "音源状态已清除", spatialId, entity: listener ? "listener" : "source", detail: "原生对象生命周期重置；等待已提交位置");
+                if (listener) yield return E("remove", "衰减监听点已移除", spatialId, entity: "distance-listener", detail: "所属 Listener 生命周期重置");
+                yield break;
+            }
+            bool update = f.EndsWith("_Update", StringComparison.Ordinal);
+            if (spatialId.Length > 0 && !update && f.Contains("_Set", StringComparison.Ordinal))
+            {
+                if (!pendingSpatial.TryGetValue(spatialId, out var pending)) pendingSpatial[spatialId] = pending = new();
                 foreach (var value in p.Where(v => v.Name is "3dPosVector_Position" or "3dPosVector_FocusPoint" or "3dDistanceFocusLevel" or "3dDirectionFocusLevel"))
-                    state[value.Name] = (value.Value, packet.TimeMicroseconds);
-                if (f == "Ex3dListener_Update" && state.TryGetValue("3dDistanceFocusLevel", out var level))
+                    pending[value.Name] = (value.Value, packet.TimeMicroseconds);
+            }
+            if (update && spatialId.Length > 0 && verifiedSdk)
+            {
+                if (pendingSpatialResets.Remove(spatialId))
+                {
+                    positions.Remove(spatialId); positionTimes.Remove(spatialId); positionEvidence.Remove(spatialId); listeners.Remove(spatialId);
+                    yield return E("remove", "空间参数重置已提交", spatialId, entity: listener ? "listener" : "source", detail: "重置默认值未投影；等待明确位置设置");
+                    if (listener) yield return E("remove", "衰减监听点已移除", spatialId, entity: "distance-listener", detail: "Listener 参数重置已提交");
+                }
+                // This SDK logs the old parameter block before copying setters into the applied block.
+                // With no observed setter, a hot-attach snapshot cannot prove the post-call position.
+                if (!listeners.TryGetValue(spatialId, out var state)) listeners[spatialId] = state = new();
+                if (pendingSpatial.Remove(spatialId, out var pending))
+                    foreach (var value in pending) state[value.Key] = value.Value;
+                if (state.TryGetValue("3dPosVector_Position", out var applied) && applied.Value is float[] { Length: 3 } coordinates && coordinates.All(float.IsFinite))
+                {
+                    var position = (coordinates[0], coordinates[1], coordinates[2]);
+                    positionTimes[spatialId] = applied.Time;
+                    positionEvidence[spatialId] = JsonSerializer.Serialize(new { sdk = VerifiedSdkVersion, submittedAtMicroseconds = packet.TimeMicroseconds,
+                        setterObservedAtMicroseconds = applied.Time, appliedPosition = coordinates });
+                    if (!positions.TryGetValue(spatialId, out var previous) || previous != position)
+                    {
+                        positions[spatialId] = position;
+                        if (!listener) { if (SourcePosition(spatialId) is { } sourceEvent) yield return sourceEvent; }
+                        else
+                        {
+                            var ev = E("position", "Listener", spatialId, entity: "listener", detail: "Update 提交的位置");
+                            ev.x = position.Item1; ev.y = position.Item2; ev.z = position.Item3;
+                            ev.raw = JsonSerializer.Serialize(new { native = JsonSerializer.Deserialize<JsonElement>(raw), derived = new {
+                                sdk = VerifiedSdkVersion, committedAtMicroseconds = packet.TimeMicroseconds,
+                                positionObservedAtMicroseconds = applied.Time, appliedPosition = coordinates } });
+                            yield return ev;
+                        }
+                    }
+                    else suppressed[f] = suppressed.GetValueOrDefault(f) + 1;
+                }
+                if (listener && state.TryGetValue("3dDistanceFocusLevel", out var level))
                 {
                     double weight = Convert.ToDouble(level.Value, CultureInfo.InvariantCulture);
                     float[]? basePos = state.GetValueOrDefault("3dPosVector_Position").Value as float[];
                     float[]? focus = state.GetValueOrDefault("3dPosVector_FocusPoint").Value as float[];
-                    if (weight >= 0 && weight <= 1 && (weight == 1 || basePos is { Length: 3 }) && (weight == 0 || focus is { Length: 3 }))
+                    if (double.IsFinite(weight) && weight >= 0 && weight <= 1 &&
+                        (weight == 1 || basePos is { Length: 3 } && basePos.All(float.IsFinite)) &&
+                        (weight == 0 || focus is { Length: 3 } && focus.All(float.IsFinite)))
                     {
                         var distance = E("position", "衰减监听点", spatialId, entity: "distance-listener", detail: "Listener Update 提交；(1−权重)×Listener + 权重×Focus");
                         double Axis(int index) => weight == 0 ? basePos![index] : weight == 1 ? focus![index] : (1-weight)*basePos![index]+weight*focus![index];
@@ -141,7 +193,20 @@ public sealed class NativeEventMapper(string session)
                         entity: listener ? "listener" : "source", detail: "原生字段变更；完整向量见原生详情");
                 }
             }
-            if (!Has("3dPosVector_Position") && (f.Contains("SetOrientation") || f.Contains("SetVelocity") || f.Contains("Focus"))) yield break;
+            // Retain changed setters/unknown snapshots, but do not flood the cache with identical per-frame updates.
+            if (Has("3dPosVector_Position") && (!update || !positions.ContainsKey(spatialId)))
+            {
+                string key = spatialId + "/position-evidence/" + f;
+                string value = JsonSerializer.Serialize(p.Where(v => v.Name == "3dPosVector_Position").Select(v => v.Value));
+                if (!spatialState.TryGetValue(key, out var prior) || prior.Value != value)
+                {
+                    spatialState[key] = (value, time);
+                    yield return E("log", f, spatialId, entity: listener ? "listener" : "source",
+                        detail: update ? "原生 Update 快照；未确认提交后位置" : "位置设置；等待 Update 提交");
+                }
+                else suppressed[f] = suppressed.GetValueOrDefault(f) + 1;
+            }
+            yield break;
         }
         if (f is "ExPlayer_SetCueId" or "ExPlayer_SetCueName" or "ExPlayer_SetCueIndex")
         {
@@ -180,15 +245,43 @@ public sealed class NativeEventMapper(string session)
                 detail: f == "SoundVoice_FreeVoice" ? "原生 Voice 释放；reason=" + S("VoiceStopReason") :
                 packet.TimeMicroseconds <= captureStart ? "连接时已存在 Voice；起点未知" : "原生 Voice 分配");
             voiceEvent.lifecycle = f == "SoundVoice_Allocate" ? "allocated" : "released";
+            if (f == "SoundVoice_FreeVoice")
+            {
+                voiceEvent.endReason = verifiedSdk ? S("VoiceStopReason") switch
+                {
+                    "0" => "player-stop", "1" => "player-stop-immediate", "2" => "playback-stop",
+                    "3" => "playback-stop-immediate", "22" => "natural", "54" => "playback-limit", _ => ""
+                } : "";
+                if (!playbackEndReasons.TryGetValue(playback, out var reasons)) playbackEndReasons[playback] = reasons = new();
+                // Unknown or mixed per-Voice reasons must not become a definitive instance reason.
+                reasons.Add(voiceEvent.endReason);
+            }
             yield return voiceEvent;
             if (changedSource != null && SourcePosition(changedSource) is { } changedPosition) yield return changedPosition;
             yield break;
         }
+        if (f is "ExPlayback_Stop" or "ExPlayback_StopWithoutReleaseTime" or "ExPlayer_Stop" or "ExPlayer_StopWithoutReleaseTime")
+        {
+            bool byPlayer = f.StartsWith("ExPlayer_", StringComparison.Ordinal);
+            string reason = (byPlayer ? "player-stop" : "playback-stop") + (f.EndsWith("WithoutReleaseTime", StringComparison.Ordinal) ? "-immediate" : "");
+            var targets = byPlayer ? playbacks.Where(v => v.Value.Player == player && player.Length > 0).Select(v => v.Key).ToArray() :
+                Has("ExPlaybackId_unique64") || Has("CriAtomExPlaybackId") ? new[] { playback } : Array.Empty<string>();
+            foreach (var target in targets)
+            {
+                var info = playbacks.GetValueOrDefault(target);
+                var ev = E("stop-request", info.Name ?? "Cue", target, entity: "cue", parent: info.Player ?? player,
+                    detail: "请求停止；实际播放结束另行记录");
+                ev.lifecycle = "stop-requested"; ev.endReason = reason;
+                yield return ev;
+            }
+            if (targets.Length == 0) yield return E("log", "停止请求（未观测到关联实例）", player, entity: "player", detail: f);
+            yield break;
+        }
         if (f == "ExCue_StopByLimit")
         {
-            var ev = E("stop", playbacks.GetValueOrDefault(playback).Name ?? "Cue", playback, entity: "cue",
+            var ev = E("stop-request", playbacks.GetValueOrDefault(playback).Name ?? "Cue", playback, entity: "cue",
                 detail: "播放数量限制触发停止；关联实例见 causeId；实例释放另行记录");
-            ev.lifecycle = "stopped"; ev.endReason = "playback-limit";
+            ev.lifecycle = "stop-requested"; ev.endReason = "playback-limit";
             ev.causeId = Has("cause ExPlaybackId_unique64") ? $"playback:{segment}:" + S("cause ExPlaybackId_unique64") :
                 Has("cause CriAtomExPlaybackId") ? $"playback-id:{segment}:" + S("cause CriAtomExPlaybackId") : "";
             yield return ev; yield break;
@@ -197,6 +290,7 @@ public sealed class NativeEventMapper(string session)
         {
             var ev = E("log", playbacks.GetValueOrDefault(playback).Name ?? "Cue 结束", playback, entity: "cue", detail: "CRI 播放实例释放");
             ev.lifecycle = "released";
+            if (playbackEndReasons.Remove(playback, out var reasons) && reasons.Count == 1) ev.endReason = reasons.Single();
             yield return ev;
             playbacks.Remove(playback); yield break;
         }
@@ -262,26 +356,6 @@ public sealed class NativeEventMapper(string session)
             ev.raw = JsonSerializer.Serialize(new { function = f, timeMicroseconds = packet.TimeMicroseconds,
                 channels = peaks.Select((peak, i) => new { channel = i + 1, peak, rms = rms[i], hold = hold[i] }), parameters = p });
             yield return ev; yield break;
-        }
-        if (f.StartsWith("Ex3d", StringComparison.Ordinal) && Has("3dPosVector_Position"))
-        {
-            bool listener = f.Contains("Listener", StringComparison.Ordinal);
-            string id = S(listener ? "CriAtomEx3dListenerHn" : "CriAtomEx3dSourceHn");
-            var coordinates = (float[])p.First(v => v.Name == "3dPosVector_Position").Value;
-            if (coordinates.All(float.IsFinite))
-            {
-                var position = (coordinates[0], coordinates[1], coordinates[2]);
-                positionTimes[id] = packet.TimeMicroseconds; positionEvidence[id] = raw;
-                if (positions.TryGetValue(id, out var previous) && previous == position)
-                {
-                    suppressed[f] = suppressed.GetValueOrDefault(f) + 1; yield break;
-                }
-                positions[id] = position;
-                if (!listener) { if (SourcePosition(id) is { } sourceEvent) yield return sourceEvent; yield break; }
-                var ev = E("position", listener ? "Listener" : "音源", id, entity: listener ? "listener" : "source", detail: "世界坐标");
-                ev.x = coordinates[0]; ev.y = coordinates[1]; ev.z = coordinates[2]; yield return ev;
-            }
-            yield break;
         }
         if (f.Contains("Pause", StringComparison.Ordinal))
         {

@@ -243,8 +243,9 @@ public sealed class SmokeApp : Application
                     var spatialPng=window.CapturePng("workspace");
                     var pointHits=(List<(Rect rect,WireEvent item)>)typeof(TimelineControl).GetField("_hits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(spatialTimeline)!;
                     var expansionHits=(List<(Rect rect,string key)>)typeof(TimelineControl).GetField("_expandHits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(spatialTimeline)!;
-                    var listenerHit=pointHits.Single(h=>h.item.entity=="distance-listener");
-                    var sourceHit=expansionHits.Single(h=>h.key.StartsWith("spatial:"));
+                    var listenerHit=pointHits.Single(h=>h.item.entity=="distance-listener" && h.rect.Height==46);
+                    var spatialHits=(List<(Rect rect,WireEvent? item,string? key)>)typeof(TimelineControl).GetField("_spatialHits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(spatialTimeline)!;
+                    var sourceHit=spatialHits.Single(h=>h.key?.StartsWith("spatial:")==true && h.rect.Height==46);
                     Check(!listenerHit.rect.Intersects(sourceHit.rect) && listenerHit.rect.Height==46 && sourceHit.rect.Height==46, "同坐标监听点与音源堆叠标注及点击区不重叠");
                     Check(spatialTimeline.Events.All(e=>e.x==0&&e.z==3), "空间标注错位不改变真实坐标");
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/spatial-same-point.png"),spatialPng);
@@ -387,7 +388,7 @@ public sealed class SmokeApp : Application
                     await Task.Delay(650);
                     Check(Field<ListBox>("_events").ItemsSource!.Cast<ListBoxItem>().Count(i=>i.Tag is WireEvent)==1,"暂停日志刷新仍采集且列表保持稳定");
                     window.ApplyUiAction("log-follow","true");
-                    Check(Field<ListBox>("_events").ItemsSource!.Cast<ListBoxItem>().Count(i=>i.Tag is WireEvent)==2,"继续实时补上暂停期间日志");
+                    Check(Field<ListBox>("_events").ItemsSource!.Cast<ListBoxItem>().Count(i=>i.Tag is WireEvent)==1,"同一实例新增Voice不重复生成开始播放日志");
                     window.ApplyUiAction("log-search","");
                     window.ApplyUiAction("theme","light");await Task.Delay(150);
                     var loggedStart=Field<ListBox>("_events").ItemsSource!.Cast<ListBoxItem>().Single(i=>i.Tag is WireEvent e&&e.seq==1);
@@ -396,6 +397,31 @@ public sealed class SmokeApp : Application
                     Check(ControlPresentation.Group(navSession.ViewSnapshot(),4).Single(g=>g.Name=="Distance").Rows.Single().TargetLabel.Contains("Music Fixture"),"Player子行关联当前Cue名");
                     var noLink=WireEvent.Parse(navSource.ToJson());noLink.raw="{\"derived\":{\"links\":[]}}";noLink.time=5;noLink.seq=7;
                     Check(AssociationPresentation.SourcePlaybacks(navSession.ViewSnapshot().Append(noLink),navSource,5).Length==0,"旧选中点不保留已消失的播放关联");
+                    Check(EventLogPresentation.Project(lifecycle).Count(e=>e.kind=="play")==2,"三个Voice归并为两个实例开始");
+                    Check(EventLogPresentation.Project(lifecycle,true).Count(e=>e.kind=="play")==3,"声部明细保留全部分配记录");
+                    var selectedCard=Field<StackPanel>("_sessions").GetLogicalDescendants().OfType<Button>().Single(b=>b.Tag?.ToString()=="selected-client");
+                    Check(selectedCard.BorderThickness.Left==1,"客户端选中框有实际厚度");
+                    window.ApplyUiAction("workspace","Timeline");window.ApplyUiAction("select","1");
+                    Check(Field<StackPanel>("_details").Children.OfType<Grid>().Any(g=>g.Tag?.ToString()=="row:播放历时"&&g.ColumnDefinitions.Count==2),"播放详情使用两列属性表");
+                    var stopRequest=new WireEvent {kind="stop-request",entity="cue",objectId=navRequest.objectId,time=2,endReason="playback-stop",session=navSession.Id};
+                    var stopping=PlaybackPresentation.Group(new[]{navRequest,new WireEvent{kind="play",entity="voice",objectId="vv",parentId=navRequest.objectId,time=1.1},stopRequest},3).Single();
+                    Check(stopping.End==null&&stopping.StatusLabel=="停止中"&&stopping.StopRequestedAt==2,"停止请求不提前结束实例");
+                    var labelA=SpatialPresentation.PlaceLabel(new Avalonia.Point(80,80),180,new Avalonia.Rect(0,0,500,400),[]);
+                    var labelB=SpatialPresentation.PlaceLabel(new Avalonia.Point(80,80),180,new Avalonia.Rect(0,0,500,400),[labelA!.Value]);
+                    Check(labelB!=null&&!labelA.Value.Intersects(labelB.Value),"同点标签避让");
+                    var manySources=Enumerable.Range(0,30).Select(i=>new WireEvent{kind="position",entity="source",objectId="overlay"+i,time=1,seq=i+1,name="同点声音 "+i}).ToArray();
+                    var overlaySession=Meta(Guid.NewGuid().ToString("N"),"native","overlay-test");sessions[overlaySession.Id]=overlaySession;
+                    foreach(var item in manySources){item.session=overlaySession.Id;overlaySession.Accept(item);}
+                    overlaySession.Accept(new WireEvent{kind="position",entity="distance-listener",objectId="listener",time=1,seq=31,session=overlaySession.Id,name="监听点"});
+                    Select(overlaySession);window.ApplyUiAction("workspace","空间");
+                    var overlayTimeline=Field<TimelineControl>("_timeline");
+                    overlayTimeline.FocusEvent(manySources[0]);overlayTimeline.InvalidateVisual();await Task.Delay(180);
+                    window.CapturePng("window");
+                    Check(overlayTimeline.SpatialOverlayBounds.Height>0&&overlayTimeline.SpatialOverlayMaxScroll>0,"同点列表限高且支持滚动");
+                    Check(ToolTip.GetTip(overlayTimeline)==null,"列表打开没有旧tooltip遮挡");
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v06-spatial-overlay.png"),window.CapturePng("window"));
+                    overlayTimeline.CloseSpatialList();window.CapturePng("window");
+                    Check(overlayTimeline.ExpandedKeys.All(k=>!k.StartsWith("spatial:")),"空间列表可独立关闭");
                     Console.WriteLine($"结果：{passed}/{passed} UI 检查通过"); desktop.Shutdown(0);
                 }
                 catch (Exception ex) { Console.Error.WriteLine($"FAIL：已通过 {passed} 项；{ex}"); desktop.Shutdown(1); }
