@@ -212,7 +212,8 @@ public sealed class SmokeApp : Application
                     Check(window.CurrentTimeRange()==(1d,3d), "问题包导出获取当前时间范围");
                     string? problemDescription=null;
                     window.ExportProblemAsync = _ => { problemDescription=window.ProblemDescription;return Task.FromResult(a.RecordingPath); };
-                    var exportButton=window.GetVisualDescendants().OfType<Button>().Single(button=>ToolTip.GetTip(button)?.ToString()=="导出问题包");
+                    var moreButton=window.GetVisualDescendants().OfType<Button>().Single(button=>ToolTip.GetTip(button)?.ToString()=="更多操作");
+                    var exportButton=((StackPanel)((Flyout)moreButton.Flyout!).Content!).Children.OfType<Button>().Single(button=>ToolTip.GetTip(button)?.ToString()=="导出问题包…");
                     Click(exportButton);await Task.Delay(150);
                     var exportDialog=desktop.Windows.Single(w=>w!=window);
                     exportDialog.GetVisualDescendants().OfType<TextBox>().Single().Text="测试问题描述";
@@ -378,9 +379,8 @@ public sealed class SmokeApp : Application
                     Check(AssociationPresentation.SourcesFor(navSession.ViewSnapshot(),["1:playback:1:9"],3).Length==0,"空间关系不跨epoch误关联");
                     Check(AssociationPresentation.SourcesFor(navSession.ViewSnapshot(),[navRequest.objectId],1.5).Length==0,"不使用未来位置填历史");
                     Check(AssociationPresentation.Categories(navSession.ViewSnapshot(),navRequest.objectId,3).Single().name=="Music","Category属于具体播放实例");
-                    var categoryButton=Field<StackPanel>("_details").GetLogicalDescendants().OfType<Button>().First(b=>b.Tag?.ToString()?.StartsWith("category-filter:")==true);
-                    Click(categoryButton);Check(State().GetProperty("category").GetString()=="Music","Category链接筛选轨道并显示条件");
-                    window.ApplyUiAction("back",null);
+                    var categoryLabel=Field<StackPanel>("_details").GetLogicalDescendants().OfType<TextBlock>().First(b=>b.Tag?.ToString()?.StartsWith("category-info:")==true);
+                    Check(categoryLabel.Text=="Music"&&State().GetProperty("category").GetString()=="","Category仅显示归属，不改变筛选");
                     window.ApplyUiAction("workspace","Logs");window.ApplyUiAction("log-search","开始播放 Music");
                     Check(Field<ListBox>("_events").ItemsSource!.Cast<ListBoxItem>().Count(i=>i.Tag is WireEvent)==1,"日志支持中文动作与CueName组合搜索");
                     window.ApplyUiAction("log-follow","false");
@@ -392,7 +392,7 @@ public sealed class SmokeApp : Application
                     window.ApplyUiAction("log-search","");
                     window.ApplyUiAction("theme","light");await Task.Delay(150);
                     var loggedStart=Field<ListBox>("_events").ItemsSource!.Cast<ListBoxItem>().Single(i=>i.Tag is WireEvent e&&e.seq==1);
-                    Check(((Grid)loggedStart.Content!).Children.OfType<TextBlock>().First().Text=="00:00.000","切换主题后日志仍使用采集相对时间");
+                    Check(((Grid)loggedStart.Content!).Children.OfType<TextBlock>().First().Text=="≈"+navSession.EstimateWallTime((WireEvent)loggedStart.Tag!)!.Value.ToLocalTime().ToString("HH:mm:ss.fff"),"日志使用会话锚点换算的毫秒钟表时间");
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v05-log-fixture.png"),window.CapturePng("window"));
                     Check(ControlPresentation.Group(navSession.ViewSnapshot(),4).Single(g=>g.Name=="Distance").Rows.Single().TargetLabel.Contains("Music Fixture"),"Player子行关联当前Cue名");
                     var noLink=WireEvent.Parse(navSource.ToJson());noLink.raw="{\"derived\":{\"links\":[]}}";noLink.time=5;noLink.seq=7;
@@ -422,6 +422,8 @@ public sealed class SmokeApp : Application
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v06-spatial-overlay.png"),window.CapturePng("window"));
                     overlayTimeline.CloseSpatialList();window.CapturePng("window");
                     Check(overlayTimeline.ExpandedKeys.All(k=>!k.StartsWith("spatial:")),"空间列表可独立关闭");
+                    Check(EventLogPresentation.Includes(new WireEvent{kind="stop-request"},"请求停止")&&!EventLogPresentation.Includes(new WireEvent{kind="play"},"请求停止"),"停止请求可单独筛选");
+                    Check(!EventLogPresentation.Includes(new WireEvent{kind="stop-request"},"播放结束"),"结束筛选不混入停止请求");
                     Console.WriteLine($"结果：{passed}/{passed} UI 检查通过"); desktop.Shutdown(0);
                 }
                 catch (Exception ex) { Console.Error.WriteLine($"FAIL：已通过 {passed} 项；{ex}"); desktop.Shutdown(1); }

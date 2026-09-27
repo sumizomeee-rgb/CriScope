@@ -21,6 +21,10 @@ public static class EventLogPresentation
     };
     public static bool Includes(WireEvent e, string category) => category switch
     {
+        "请求播放" => e.kind=="request",
+        "开始播放" => e.kind=="play",
+        "请求停止" => e.kind=="stop-request",
+        "播放结束" => EventSemantics.IsPlaybackEnd(e),
         "播放" => e.kind is "request" or "play" or "stop" or "stop-request" || EventSemantics.IsPlaybackEnd(e),
         "控制" => e.kind is "aisac" or "selector" or "category",
         "回调" => e.kind is "beat" or "sequence" or "block",

@@ -68,12 +68,12 @@ public sealed partial class MainWindow
         foreach(var owner in owners)
         {
             if((_mode!="Timeline" || playback == null) && AssociationPresentation.Anchor(owner) is {} anchor)
-                Link("声音轨道 · " + owner.Name + " · " + (owner.RequestAt is {} at ? _timeline.Stamp(at) : "开始未记录"), "Timeline", anchor, _mode == "Logs");
+                Link("定位声音 · " + owner.Name + " · " + (owner.RequestAt is {} at ? _timeline.Stamp(at) : "开始未记录"), "Timeline", anchor, _mode == "Logs");
         }
         if(playback != null)
         {
             var playerLabel = _timeline.ControlLabels.Get("Player", System.Text.Json.JsonSerializer.Serialize(new[] { playback.Request?.session ?? "", playback.PlayerId }));
-            if(playback.PlayerId.Length>0) links.Children.Add(Label(playerLabel + " · 关联控制",11,_p.Muted));
+
             var controls = PlaybackPresentation.ControlsFor(playback, _snapshot, _timeline.End);
 
         }
@@ -81,7 +81,7 @@ public sealed partial class MainWindow
         {
             var sources = AssociationPresentation.SourcesFor(_snapshot, owners.Select(p=>p.Id), time);
             foreach(var source in sources)
-                Link(sources.Length == 1 ? "在空间中查看" : $"音源 · X {source.x:0.#} / Z {source.z:0.#}", "Location", source);
+                Link(sources.Length == 1 ? "定位音源" : $"音源 · X {source.x:0.#} / Z {source.z:0.#}", "Location", source);
             if(owners.Length>0 && sources.Length==0)
             {
                 var unavailable=Label("空间关联未提供",11,_p.Muted);

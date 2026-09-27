@@ -147,7 +147,7 @@ public sealed partial class MainWindow : Window
     private Control ButtonContent(string text, bool accent = false)
     {
         var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-        var path = text.StartsWith("Category") ? "M3,4 H12 L21,13 L13,21 L3,11 Z M7,8 H7.1" : text.Contains("声音轨道") || text.Contains("定位事件") || text.Contains("跳至") ? "M3,5 V19 M7,8 H21 M7,12 H17 M7,16 H21" : text.Contains("暂停刷新") ? "M8,4 V20 M16,4 V20" : text.Contains("继续实时") ? "M4,12 H8 L11,4 L15,20 L18,12 H22" : text.Contains("更早记录") ? "M12,4 V20 M6,14 L12,20 L18,14" : text.Contains("返回上一") ? "M10,5 L3,12 L10,19 M3,12 H16 Q22,12 21,19" : text.Contains("日志") && !text.Contains("记录") && !text.Contains("打开") ? "M4,3 H20 V21 H4 Z M8,7 H16 M8,12 H16 M8,17 H13" : text.Contains("导出") ? "M12,16 V3 M7,8 L12,3 L17,8 M4,14 V21 H20 V14" : text.Contains("开始记录") ? "M12,4 A8,8 0 1 0 12,20 A8,8 0 1 0 12,4" : (text.Contains("记录") || text.Contains("保存")) ? "M8,8 H16 V16 H8 Z" : text.Contains("打开") ? "M3,7 H10 L12,9 H21 L18,19 H3 Z M3,7 V5 H10 L12,7" :
+        var path = text.Contains("定位") || text.Contains("查看") || text.Contains("跳至") || text.Contains("声音轨道") ? IconPath(UiIcon.Locate) : text.StartsWith("Category") ? "M3,4 H12 L21,13 L13,21 L3,11 Z M7,8 H7.1" : text.Contains("声音轨道") || text.Contains("定位事件") || text.Contains("跳至") ? "M3,5 V19 M7,8 H21 M7,12 H17 M7,16 H21" : text.Contains("暂停刷新") ? "M8,4 V20 M16,4 V20" : text.Contains("继续实时") ? "M4,12 H8 L11,4 L15,20 L18,12 H22" : text.Contains("更早记录") ? "M12,4 V20 M6,14 L12,20 L18,14" : text.Contains("返回上一") ? "M10,5 L3,12 L10,19 M3,12 H16 Q22,12 21,19" : text.Contains("日志") && !text.Contains("记录") && !text.Contains("打开") ? "M4,3 H20 V21 H4 Z M8,7 H16 M8,12 H16 M8,17 H13" : text.Contains("导出") ? "M12,16 V3 M7,8 L12,3 L17,8 M4,14 V21 H20 V14" : text.Contains("开始记录") ? "M12,4 A8,8 0 1 0 12,20 A8,8 0 1 0 12,4" : (text.Contains("记录") || text.Contains("保存")) ? "M8,8 H16 V16 H8 Z" : text.Contains("打开") ? "M3,7 H10 L12,9 H21 L18,19 H3 Z M3,7 V5 H10 L12,7" :
             text.Contains("声音时间线") ? "M3,5 V19 M7,8 H21 M7,12 H17 M7,16 H21" : text.Contains("播放") ? "M7,4 L20,12 L7,20 Z" : text.Contains("控制") ? "M5,3 V21 M12,3 V21 M19,3 V21 M2,8 H8 M9,16 H15 M16,6 H22" :
             text.Contains("混音") ? "M4,9 V18 M9,4 V20 M14,7 V17 M19,2 V22" : text.Contains("空间") ? "M12,3 L21,8 V17 L12,22 L3,17 V8 Z M3,8 L12,13 L21,8 M12,13 V22" :
             text.Contains("资源") ? "M4,4 H20 V9 H4 Z M4,14 H20 V19 H4 Z" : text.Contains("连接") ? "M8,5 L4,9 V15 L8,19 M16,5 L20,9 V15 L16,19 M8,12 H16" :
@@ -178,7 +178,7 @@ public sealed partial class MainWindow : Window
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
         _record = Action("开始录制", Record); _record.BorderThickness=new Thickness(1);
         actions.Children.Add(_record);
-        actions.Children.Add(Action("打开日志", async () =>
+        var openRecording=Action("打开录制…", async () =>
         {
             try
             {
@@ -188,9 +188,12 @@ public sealed partial class MainWindow : Window
                 if (files.Count > 0 && files[0].TryGetLocalPath() is { } path) Load(path);
             }
             catch (Exception ex) { _error = ex.Message; }
-        }));
-        actions.Children.Add(Action("导出问题包", async () => await ExportProblem()));
-        actions.Children.Add(Action(_p.Light ? "暗色" : "浅色", () => { SaveView(); _p = new Palette(!_p.Light); Build(); RestoreView(); Refresh(); }));
+        });
+        var export=Action("导出问题包…",async()=>await ExportProblem());
+        var more=IconAction("更多操作",UiIcon.More,()=>{});
+        var menu=new Flyout {Content=new StackPanel {Spacing=4,Children={openRecording,export}}};
+        more.Flyout=menu;openRecording.Click+=(_,_)=>menu.Hide();export.Click+=(_,_)=>menu.Hide();actions.Children.Add(more);
+        actions.Children.Add(IconAction(_p.Light?"切换到深色":"切换到浅色",_p.Light?UiIcon.Moon:UiIcon.Sun,()=>{SaveView();_p=new Palette(!_p.Light);Build();RestoreView();Refresh();}));
         Grid.SetColumn(actions, 2); top.Children.Add(actions); var topSurface = Surface(top, _p.Shell); Grid.SetRow(topSurface, 1); root.Children.Add(topSurface);
 
         _body = new Grid { ColumnDefinitions = new ColumnDefinitions("208,*,282") };
@@ -627,6 +630,7 @@ public sealed partial class MainWindow : Window
             _timeline.SourceConnected=s.Connected || s.IsReplay;
             _timeline.TimeOrigin=s.TimeOrigin;
             _timeline.SupplementMetrics=_supplementMetrics;
+            _timeline.WallStamp=time=>WallTime(time,s);
             if (!_controlLabels.TryGetValue(s, out var labels)) _controlLabels[s] = labels = new ControlIdentityLabels();
             _timeline.ControlLabels = labels;
             if (_timeline.Live && _snapshot.Length > 0) _timeline.End = _snapshot.Max(e => e.time);
@@ -650,7 +654,7 @@ public sealed partial class MainWindow : Window
     }
     private void UpdateRange() => _range.Text = _timeline.SelectionStart is { } a && _timeline.SelectionEnd is { } b && Math.Abs(a-b)>.000001
         ? $"选区 {_timeline.Stamp(Math.Min(a,b))} — {_timeline.Stamp(Math.Max(a,b))} · 持续 {Math.Abs(b-a):0.000} 秒"
-        : $"{(_timeline.Live ? "跟随最新" : "暂停跟随 · 采集继续")}  ·  采集相对时间 {_timeline.Stamp(_timeline.Start)} — {_timeline.Stamp(_timeline.End)}  ·  窗口 {_timeline.Span:0.#} 秒 · 包含已结束的历史记录";
+        : $"{(_timeline.Live ? "跟随最新" : "暂停跟随 · 采集继续")}  ·  采集相对时间 {_timeline.Stamp(_timeline.Start)} — {_timeline.Stamp(_timeline.End)}  ·  窗口 {_timeline.ViewSpan:0.#} 秒 · 包含已结束的历史记录";
     private void UpdateEvents()
     {
         if (_events == null) return;
@@ -690,6 +694,7 @@ public sealed partial class MainWindow : Window
     {
         var content = new StackPanel();
         BuildInspector(content);
+        StyleFolds(content);
         if (!ReferenceEquals(_inspectedEvent, _selected)) _details.Children.Clear();
         InspectorPresentation.Update(_details, content);
         _inspectedEvent = _selected;
@@ -724,12 +729,13 @@ public sealed partial class MainWindow : Window
         var eventSession=_collector.Sessions.FirstOrDefault(s=>s.Id==e.session)??_session;
         bool independentClock=eventSession!=_session&&!e.estimatedTime;
         var clockSession=independentClock?eventSession:_session;
-        Field(PlaybackPresentation.IsUnknownStart(e) ? "首次观测于" : "事件发生于", "+" + TimelineControl.TimeLabel(e.time-(clockSession?.TimeOrigin??0)) + (e.estimatedTime?"（SDK 约时）":independentClock?"（SDK 独立时间）":""));
+        Field(PlaybackPresentation.IsUnknownStart(e) ? "首次观测于" : "事件发生于", WallTime(e.time,clockSession));
         ToolTip.SetTip(details.Children.Last(),"钟表时间："+(clockSession?.FormatWallTime(e)??"未提供"));
         bool controlEvent=ControlPresentation.Kinds.Contains(e.kind);
         if(controlEvent)Field(e.kind=="sequence"?"回调内容":e.kind is "aisac" or "selector"?"设置内容":"事件内容",ControlPresentation.Value(e));
         var playbackId=e.entity=="cue"?e.objectId:e.parentId;
-        var groups=PlaybackPresentation.Group(_snapshot,_timeline.End);
+        var inspectedAt=controlEvent?e.time:_timeline.End;
+        var groups=PlaybackPresentation.Group(_snapshot,inspectedAt);
         var playback=groups.FirstOrDefault(g=>g.Id==playbackId);
         var eventDetails=details;
         if(playback!=null && controlEvent) {
@@ -738,35 +744,39 @@ public sealed partial class MainWindow : Window
         }
         if(playback!=null)
         {
-            Field("播放实例", PlaybackLabel(playback));
+            Field("播放实例", PlaybackLabel(playback).Split(" · ").Last());
             var categories=AssociationPresentation.Categories(_snapshot,playback.Id,_timeline.End);
             if(categories.Length==0)Field("Category","未收到归属");
             else {
                 var categoryRow=new WrapPanel {Tag="categories",Margin=new Thickness(0,6)};
-                foreach(var category in categories){var chip=Action(category.name,()=>FilterCategory(category));chip.Tag="category-filter:"+category.objectId;chip.Background=_p.Alternate;chip.Margin=new Thickness(0,0,5,5);categoryRow.Children.Add(chip);}
+                categoryRow.Children.Add(Label("所属 Category",12,_p.Muted));
+                foreach(var category in categories){var chip=Label(category.name,13);chip.Tag="category-info:"+category.objectId;chip.Margin=new Thickness(8,0,8,5);ToolTip.SetTip(chip,category.name);categoryRow.Children.Add(chip);}
                 details.Children.Add(categoryRow);
             }
-            Field("状态", !_timeline.SourceConnected && playback.End==null ? "已断开 · 最后状态" : (!_timeline.Live && playback.End==null ? "该时刻" : "")+playback.StatusLabel);
-            if(playback.PlayerId.Length>0)Field("播放器",_timeline.ControlLabels.Get("Player",JsonSerializer.Serialize(new[]{playback.Request?.session??"",playback.PlayerId})));
-            Field("开始播放", playback.StartedAt is {} started?"+"+_timeline.Stamp(started):playback.UnknownStart?"开始发生在记录之前":"尚未分配 Voice");
-            Field("结束播放", playback.EndedAt is {} stopped?"+"+_timeline.Stamp(stopped):playback.End!=null?"实例已结束，声部释放时间未记录":"—");
-            Field("播放历时", playback.DurationAt(_timeline.End) is {} duration?$"{duration:0.000} 秒"+(playback.EndedAt==null?"（截至最后观测）":""):"未完整记录");
+            Field("状态", !_timeline.SourceConnected && playback.End==null ? "已断开 · 最后状态" : (controlEvent || !_timeline.Live ? "该时刻 · " : "")+(playback.End!=null?"已结束":playback.StatusLabel));
+
+            if(playback.RequestAt is {} playRequested)Field("请求播放",WallTime(playRequested,clockSession));
+            Field("开始播放", playback.StartedAt is {} started?WallTime(started,clockSession):playback.UnknownStart?"开始发生在记录之前":"尚未分配 Voice");
+            Field("结束播放", playback.EndedAt is {} stopped?WallTime(stopped,clockSession):playback.End!=null?"实例已结束，声部释放时间未记录":"—");
+            Field("播放历时", playback.DurationAt(inspectedAt) is {} duration?$"{duration:0.000} 秒"+(playback.EndedAt==null?"（截至最后观测）":""):"未完整记录");
             var cueInfo=_snapshot.LastOrDefault(x=>x.kind=="cue-info"&&x.name==playback.Name&&(x.parentId==playback.Id||x.objectId==playback.Id)&&x.time<=_timeline.End);
-            Field("Cue 标注时长", cueInfo==null?"未提供":cueInfo.value<0?"无限／不定长":$"{cueInfo.value/1000:0.000} 秒");
-            if(playback.EndReason.Length>0)Field("结束原因",playback.EndReasonLabel);
-            if(playback.StopRequestedAt is {} requestedAt)Field("请求停止", "+"+_timeline.Stamp(requestedAt));
+            var resourceDetails=new StackPanel {Spacing=6};resourceDetails.Children.Add(Label("Cue 标注时长："+(cueInfo==null?"未提供":cueInfo.value<0?"无限／不定长":$"{cueInfo.value/1000:0.000} 秒"),13));
+            Field("结束原因",playback.End==null?"尚未结束":playback.EndReasonLabel);
+            if(playback.StopRequestedAt is {} requestedAt)Field("请求停止", WallTime(requestedAt,clockSession));
             if(playback.CausePlaybackId.Length>0)
             {
                 var cause=groups.FirstOrDefault(g=>g.Id==playback.CausePlaybackId);
-                Field("终止原因", "播放数量限制"+(cause==null?"（触发实例未保留）":" · 由 "+cause.Name+" 的另一次播放触发"));
-                if(cause?.Request is {} causeRequest) { var button=Action("查看触发限制的播放",()=>Navigate("Timeline",causeRequest,true)); button.Tag="cause:"+cause.Id; details.Children.Add(button); }
+                Field("触发实例",cause==null?"记录未保留":PlaybackLabel(cause));
+                if(cause?.Request is {} causeRequest) { var button=Action("定位触发实例",()=>Navigate("Timeline",causeRequest,true)); button.Tag="cause:"+cause.Id; details.Children.Add(button); }
             }
             AddAssociations(details,e,playback);
-            var lifecycleDetails=new StackPanel {Spacing=7};
-            lifecycleDetails.Children.Add(Label($"请求：{(playback.RequestAt is {} requested?"+"+_timeline.Stamp(requested):"未记录")}",11));
-            lifecycleDetails.Children.Add(Label($"实例结束：{(playback.InstanceEndedAt is {} ended?"+"+_timeline.Stamp(ended):"—")}",11));
-            lifecycleDetails.Children.Add(new TextBlock { Text="播放历时按首个 Voice 分配至最后释放计算，可能包含暂停和间隔；不等于素材长度。",TextWrapping=TextWrapping.Wrap,FontSize=11,Foreground=_p.Muted });
-            details.Children.Add(new Expander {Tag="timing",Header="播放时间说明",Content=lifecycleDetails,FontSize=12});
+            ToolTip.SetTip(details.Children.OfType<Grid>().FirstOrDefault(g=>g.Tag?.ToString()=="row:播放历时")!,"首个 Voice 分配至最后释放的历时，可能包含暂停和间隔，不等于素材长度。");
+            details.Children.Add(new Expander {Tag="resource-info",Header="资源信息",Content=resourceDetails,FontSize=13});
+            var playerDetails=new StackPanel {Spacing=6};
+            playerDetails.Children.Add(Label("播放器："+_timeline.ControlLabels.Get("Player",JsonSerializer.Serialize(new[]{playback.Request?.session??"",playback.PlayerId})),13));
+            playerDetails.Children.Add(Label($"Voice：{playback.Voices.Length} 个",12));
+            playerDetails.Children.Add(Action("查看 Voice 轨道",()=>{if(AssociationPresentation.Anchor(playback) is {} target){Navigate("Timeline",target);_timeline.ShowVoiceDetails(playback.Id);}}));
+            details.Children.Add(new Expander {Tag="timing",Header="播放器与 Voice",Content=playerDetails,FontSize=13});
             var controls=PlaybackPresentation.ControlsFor(playback,_snapshot,_timeline.End);
             var controlList=new StackPanel {Spacing=8};
             void AddControl(WireEvent item,string phase)

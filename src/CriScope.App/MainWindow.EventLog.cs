@@ -22,16 +22,16 @@ public sealed partial class MainWindow
         var bar = new Grid { ColumnDefinitions = new ColumnDefinitions("*,100,Auto,Auto,Auto"), Margin = new Thickness(12,5), ColumnSpacing=8 };
         var search = _logSearch = new TextBox { Text=_logQuery, PlaceholderText="搜索日志：开始播放 CueName、实例结束、AISAC…",FontSize=12 };
         search.TextChanged+=(_,_)=>{_logQuery=search.Text??""; UpdateEventLog();}; bar.Children.Add(search);
-        var kind = new ComboBox {ItemsSource=new[]{"全部","播放","控制","回调","诊断"},SelectedItem=_logKind,FontSize=11,HorizontalAlignment=HorizontalAlignment.Stretch};
+        var kind = new ComboBox {ItemsSource=new[]{"全部","播放","请求播放","开始播放","请求停止","播放结束","控制","回调","诊断"},SelectedItem=_logKind,FontSize=11,HorizontalAlignment=HorizontalAlignment.Stretch};
         kind.SelectionChanged+=(_,_)=>{_logKind=kind.SelectedItem as string??"全部";UpdateEventLog();}; Grid.SetColumn(kind,1);bar.Children.Add(kind);
         _logFollowButton=Action(_logFollowing?"暂停刷新":"继续实时",ToggleLogFollow); Grid.SetColumn(_logFollowButton,2);bar.Children.Add(_logFollowButton);
         var earlier=Action("更早记录",()=>{_logLimit=Math.Min(20000,_logLimit+1000);UpdateEventLog();});Grid.SetColumn(earlier,3);bar.Children.Add(earlier);
-        var voices=new CheckBox {Content="声部明细",IsChecked=_logVoices,FontSize=11,VerticalAlignment=VerticalAlignment.Center};
+        var voices=new CheckBox {Content="Voice 明细",IsChecked=_logVoices,FontSize=11,VerticalAlignment=VerticalAlignment.Center};
         voices.IsCheckedChanged+=(_,_)=>{_logVoices=voices.IsChecked==true;UpdateEventLog();};Grid.SetColumn(voices,4);bar.Children.Add(voices);
         ToolTip.SetTip(voices,"默认每个实例显示一次开始与结束；展开各 Voice 的分配和释放记录。");
         panel.Children.Add(bar);
         var headings=new Grid{ColumnDefinitions=new ColumnDefinitions("108,92,280,*"),ColumnSpacing=8,Margin=new Thickness(12,0),Background=_p.Alternate};
-        foreach(var (title,column) in new[]{("采集时间",0),("动作",1),("Cue / 对象",2),("内容",3)})
+        foreach(var (title,column) in new[]{("发生时间 ≈",0),("动作",1),("Cue / 对象",2),("内容",3)})
         {var label=Label(title,10,_p.Muted);Grid.SetColumn(label,column);headings.Children.Add(label);}
         Grid.SetRow(headings,1);panel.Children.Add(headings);
         _events = new ListBox { Background=_p.Canvas,BorderThickness=new Thickness(0),FontSize=11,Foreground=_p.Text,AutoScrollToSelectedItem=false };
@@ -86,8 +86,8 @@ public sealed partial class MainWindow
             foreach(var e in results)
             {
                 var line=new Grid{ColumnDefinitions=new ColumnDefinitions("108,92,280,*"),ColumnSpacing=8,Margin=new Thickness(0,2)};
-                line.Children.Add(Label((e.estimatedTime?"约 ":"")+TimelineControl.TimeLabel(e.time-timeOrigin),11,_p.Muted));
-                var action=Label(EventLogPresentation.Action(e),11,ControlPresentation.Kinds.Contains(e.kind)?_p.Control(e.kind):e.kind is "gap" or "error"?_p.Error:_p.Voice);Grid.SetColumn(action,1);line.Children.Add(action);
+                line.Children.Add(Label((e.estimatedTime?"约 ":"")+WallTime(e.time,_session),11,_p.Muted));
+                var action=Label(_logVoices&&e.entity=="voice"?(e.kind=="play"?"Voice 分配":"Voice 释放"):EventLogPresentation.Action(e),11,ControlPresentation.Kinds.Contains(e.kind)?_p.Control(e.kind):e.kind is "gap" or "error"?_p.Error:_p.Voice);Grid.SetColumn(action,1);line.Children.Add(action);
                 var logOwner=owners.GetValueOrDefault(e.entity=="cue"?e.objectId:e.parentId);
                 var name=Label(logOwner!=null?PlaybackLabel(logOwner):e.name,13);name.TextTrimming=TextTrimming.CharacterEllipsis;Grid.SetColumn(name,2);line.Children.Add(name);
                 string detail=EventLogPresentation.Detail(e);
