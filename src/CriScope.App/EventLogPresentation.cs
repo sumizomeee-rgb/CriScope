@@ -25,7 +25,7 @@ public static class EventLogPresentation
         "开始播放" => e.kind=="play",
         "请求停止" => e.kind=="stop-request",
         "播放结束" => EventSemantics.IsPlaybackEnd(e),
-        "播放" => e.kind is "request" or "play" or "stop" or "stop-request" || EventSemantics.IsPlaybackEnd(e),
+        "播放" or "播放相关（全部）" => e.kind is "request" or "play" or "stop" or "stop-request" || EventSemantics.IsPlaybackEnd(e),
         "控制" => e.kind is "aisac" or "selector" or "category",
         "回调" => e.kind is "beat" or "sequence" or "block",
         "异常与连接" => e.kind is "error" or "warning" or "gap" or "state",

@@ -172,10 +172,10 @@ public sealed class TimelineControl : Control
                 if(SpatialOverlayBounds.Contains(e.GetPosition(this)))_vertical=Math.Clamp(_vertical-e.Delta.Y*34,0,SpatialOverlayMaxScroll);
                 InvalidateVisual();e.Handled=true;return;
             }
-            if(e.KeyModifiers.HasFlag(KeyModifiers.Control)) {
+            if(Mode!="Mixing" && e.KeyModifiers.HasFlag(KeyModifiers.Control)) {
                 var f=Math.Clamp((e.GetPosition(this).X-LabelWidth)/PlotWidth,0,1); var anchor=Start+f*ViewSpan;
                 Span=Math.Clamp(Span*(e.Delta.Y>0?.8:1.25),.25,86400); if(!Live)End=anchor+Span*(1-f);
-            } else if(e.KeyModifiers.HasFlag(KeyModifiers.Shift)){End-=e.Delta.Y*Span*.1;Live=false;}
+            } else if(Mode!="Mixing" && e.KeyModifiers.HasFlag(KeyModifiers.Shift)){End-=e.Delta.Y*Span*.1;Live=false;}
             else _vertical=Math.Clamp(_vertical-e.Delta.Y*36,0,Mode=="Mixing"?MixingMaxScroll:Math.Max(0,_contentHeight+100-Bounds.Height));
             if(Mode!="Mixing"||e.KeyModifiers.HasFlag(KeyModifiers.Control)||e.KeyModifiers.HasFlag(KeyModifiers.Shift))ViewChanged?.Invoke();InvalidateVisual();e.Handled=true;
         };
@@ -225,6 +225,7 @@ public sealed class TimelineControl : Control
             if(_spatialScrollDragging){SetSpatialScrollFromPointer(p.Y);e.Handled=true;return;}
             if(_scrollDragging){SetMixingScrollFromPointer(p.Y);e.Handled=true;return;}
             if(Mode=="Location"&&SpatialOverlayBounds.Contains(p)){ToolTip.SetTip(this,null);ToolTip.SetIsOpen(this,false);return;}
+            if(_drag == null && _links.LastOrDefault(h=>h.Rect.Contains(p)).Event is {} linkEvent){ToolTip.SetTip(this,"定位声音时间线 · "+linkEvent.name);return;}
             if(_drag is not {} start){var hit=_hits.LastOrDefault(h=>h.rect.Contains(p));ToolTip.SetTip(this,hit.item==null?null:$"{hit.item.name}\n{Stamp(hit.item.time)} · {hit.item.kind}\n{hit.item.detail}");return;}
             var delta=p.X-start.X;if(Math.Abs(delta)<8)return;
             if(_panning){End=_dragEnd-delta/PlotWidth*ViewSpan;Live=false;}
@@ -371,7 +372,8 @@ public sealed class TimelineControl : Control
             c.FillRectangle(Palette.Alternate,new Rect(0,y,Bounds.Width,40));
             using(c.PushClip(new Rect(12,y+1,Math.Max(0,Bounds.Width-36),38)))
             {
-                Text(c,(expanded?"− ":"+ ")+group.Name,12,y+3,group.Rows.Select(r=>r.Kind).Distinct().Count()==1?Palette.Control(group.Rows[0].Kind):Palette.Text,12);
+                using(c.PushTransform(Matrix.CreateTranslation(12,y+8)))c.DrawGeometry(null,new Pen(Palette.Muted,1.5),Geometry.Parse(expanded?"M0,0 L5,5 L10,0":"M2,0 L7,5 L2,10"));
+                Text(c,group.Name,28,y+3,group.Rows.Select(r=>r.Kind).Distinct().Count()==1?Palette.Control(group.Rows[0].Kind):Palette.Text,12);
                 Text(c,group.Summary,27,y+22,Palette.Muted,10);
             }
             _expandHits.Add((new Rect(0,y,Math.Max(0,Bounds.Width-20),40),group.Key));
@@ -394,15 +396,16 @@ public sealed class TimelineControl : Control
                 {
                     double chip=LabelWidth+10;
                     var owners=PlaybackGroups().Where(p=>p.PlayerId==last.objectId&&AssociationPresentation.ActiveAt(p,End)).ToArray();
-                    using var chipClip=c.PushClip(new Rect(LabelWidth,y+23,PlotWidth,18));
+                    using var chipClip=c.PushClip(new Rect(LabelWidth,y+22,PlotWidth,32));
                     foreach(var owner in owners)
                     {
-                        var caption=owner.Name+" · "+(owner.RequestAt is {} at?Stamp(at):"开始未记录");
-                        double width=Math.Min(240,caption.Length*6.5+18);
+                        var caption=owner.Name+" · "+ControlLabels.Get("播放实例",JsonSerializer.Serialize(new[]{owner.Request?.session??"",owner.Id}));
+                        double width=Math.Min(240,caption.Length*6.5+40);
                         if(chip+width>Bounds.Width-24){Text(c,"…",chip,y+24,Palette.Voice);break;}
-                        c.DrawRectangle(null,new Pen(Palette.Border),new Rect(chip,y+23,width,18),3,3);
-                        using(c.PushClip(new Rect(chip+5,y+23,width-10,18))) Text(c,caption,chip+5,y+24,Palette.Voice,10);
-                        if(AssociationPresentation.Anchor(owner) is {} ownerEvent) _links.Add((new Rect(chip,y+23,width,18),ownerEvent));
+                        c.DrawRectangle(null,new Pen(Palette.Border),new Rect(chip+width-32,y+22,32,32),3,3);
+                        using(c.PushTransform(Matrix.CreateTranslation(chip+width-24,y+30))) c.DrawGeometry(null,new Pen(Palette.Text,1.2),Geometry.Parse("M5,3 H1 V13 H11 V9 M6,1 H13 V8 M13,1 L5,9"));
+                        using(c.PushClip(new Rect(chip+5,y+23,width-42,28))) Text(c,caption,chip+5,y+24,Palette.Voice,10);
+                        if(AssociationPresentation.Anchor(owner) is {} ownerEvent) _links.Add((new Rect(chip+width-32,y+22,32,32),ownerEvent));
                         chip+=width+6;
                     }
                 }

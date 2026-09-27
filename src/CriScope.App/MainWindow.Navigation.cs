@@ -52,7 +52,7 @@ public sealed partial class MainWindow
     private void AddAssociations(StackPanel details, WireEvent selected, PlaybackGroup? playback)
     {
         double time = ContextTime;
-        var links = new StackPanel { Spacing = 5 };
+        var links = new StackPanel { Tag = "association-links", Spacing = 4 };
         void Link(string text, string mode, WireEvent target, bool eventTime = false)
         {
             var b = Action(text, () => Navigate(mode, target, eventTime));
@@ -67,8 +67,8 @@ public sealed partial class MainWindow
             : selected.kind is "aisac" or "selector" ? AssociationPresentation.PlayerPlaybacks(_snapshot, selected.objectId, time) : [];
         foreach(var owner in owners)
         {
-            if((_mode!="Timeline" || playback == null) && AssociationPresentation.Anchor(owner) is {} anchor)
-                Link("定位声音 · " + owner.Name + " · " + (owner.RequestAt is {} at ? _timeline.Stamp(at) : "开始未记录"), "Timeline", anchor, _mode == "Logs");
+            if(!(playback==null && selected.kind is "aisac" or "selector") && (_mode!="Timeline" || playback == null) && AssociationPresentation.Anchor(owner) is {} anchor)
+                Link("定位声音 · " + PlaybackLabel(owner), "Timeline", anchor, _mode == "Logs");
         }
         if(playback != null)
         {

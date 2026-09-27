@@ -98,7 +98,7 @@ public sealed class SmokeApp : Application
                     Check(State().GetProperty("live").GetBoolean() && State().GetProperty("selected").GetInt64() == 1,
                         "选择事件不退出实时且不跳到起点");
                     window.ApplyUiAction("range", "0:9999"); window.ApplyUiAction("live", "true");
-                    Check(State().GetProperty("span").GetDouble()==30 && State().GetProperty("live").GetBoolean(),"返回实时恢复30秒，不沿用巨大历史范围");
+                    Check(State().GetProperty("span").GetDouble()==9999 && State().GetProperty("live").GetBoolean(),"返回实时保留用户选择的时间范围");
                     window.ApplyUiAction("control-kind","selector:false");
                     window.ApplyUiAction("spatial-layer","sources:false");
                     window.ApplyUiAction("workspace","控制"); window.ApplyUiAction("workspace","空间");
@@ -349,14 +349,14 @@ public sealed class SmokeApp : Application
                     await Task.Delay(100);
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v041-grouping.png"),window.CapturePng("window"));
                     typeof(MainWindow).GetMethod("SelectEvent",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,[controlsFixture[2]]);
-                    Check(Field<StackPanel>("_details").Children.OfType<Expander>().Any(x=>x.Tag?.ToString()=="history"&&x.IsExpanded),"点击控制子行在抽屉直接显示设置记录");
+                    Check(Field<StackPanel>("_details").Children.OfType<Expander>().Any(x=>x.Tag?.ToString()=="more-information"&&!x.IsExpanded),"控制次要记录归入统一更多信息");
                     await Task.Delay(150);
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v041-history.png"),window.CapturePng("window"));
                     var sharedSetting=new WireEvent {session=controlSession.Id,seq=14,kind="aisac",objectId="p1",name="Shared",time=14,value=1};controlSession.Accept(sharedSetting);
                     window.ApplyUiAction("live","true");
                     typeof(MainWindow).GetMethod("SelectEvent",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,[sharedSetting]);
                     typeof(MainWindow).GetMethod("Inspector",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,null);
-                    var ownerButtons=Field<StackPanel>("_details").Children.OfType<Button>().Where(x=>x.Tag?.ToString()?.StartsWith("owner:")==true).ToArray();
+                    var ownerButtons=Field<StackPanel>("_details").GetVisualDescendants().OfType<Button>().Where(x=>x.Tag?.ToString()?.StartsWith("owner:")==true).ToArray();
                     Check(ownerButtons.Length==2&&ownerButtons.Select(b=>b.Tag).Distinct().Count()==2,"同名Cue关联按钮按实例身份保留，不复用到另一次播放");
                     Click(ownerButtons[1]);Check(Field<WireEvent>("_selected").objectId=="pb2","刷新后的同名关联链接仍指向正确实例");
                     var blockRequest=new WireEvent {kind="block",entity="control",objectId="pb1",name="请求下一 Block",time=15,value=3};
@@ -432,15 +432,19 @@ public sealed class SmokeApp : Application
                     await Task.Delay(350);
                     var drawer=Field<StackPanel>("_details");
                     Check(drawer.Children.OfType<Grid>().Any(g=>g.Tag?.ToString()=="row:Cue 时长"),"Cue时长直接显示在详情一级");
+                    Check(drawer.Children.OfType<Expander>().Count()==1 && drawer.Children.OfType<Expander>().Single().Header?.ToString()=="更多信息","详情仅有一个更多信息折叠");
+                    var morePanel=(StackPanel)drawer.Children.OfType<Expander>().Single().Content!;
+                    Check(!morePanel.Children.OfType<Expander>().Any(),"更多信息不再套多层折叠");
+                    Check(drawer.Children.OfType<StackPanel>().Any(p=>p.Tag?.ToString()=="inspector-links"),"所有主要定位集中在同一区域");
                     Check(!drawer.Children.OfType<Grid>().Any(g=>g.Tag?.ToString() is "row:事件发生于" or "row:结束原因"),"播放中无重复时间及尚未结束行");
                     Check(!window.GetVisualDescendants().OfType<Button>().Any(b=>ToolTip.GetTip(b)?.ToString()=="日志面板"),"日志只有一个常驻入口");
                     foreach(var testTheme in new[]{"dark","light"}) {
                         window.ApplyUiAction("theme",testTheme);await Task.Delay(180);
-                        var fold=Field<StackPanel>("_details").GetVisualDescendants().OfType<Expander>().First(f=>f.Tag?.ToString()=="timing");
+                        var fold=Field<StackPanel>("_details").GetVisualDescendants().OfType<Expander>().First(f=>f.Tag?.ToString()=="more-information");
                         var heading=fold.GetVisualDescendants().OfType<Button>().First();
                         Click(heading);await Task.Delay(650);
                         Check(fold.IsExpanded&&((Avalonia.Media.RotateTransform)fold.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().First().RenderTransform!).Angle==90,"折叠展开经过刷新箭头同步："+testTheme);
-                        File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v08-detail-"+testTheme+".png"),window.CapturePng("window"));
+                        File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v09-detail-"+testTheme+".png"),window.CapturePng("window"));
                         Click(heading);await Task.Delay(350);
                         Check(!fold.IsExpanded&&((Avalonia.Media.RotateTransform)fold.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().First().RenderTransform!).Angle==0,"折叠收起经过刷新箭头同步："+testTheme);
                     }

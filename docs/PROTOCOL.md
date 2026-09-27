@@ -108,4 +108,4 @@ UI action 白名单为 `workspace`、`live`、`filter`、`select`、`session`、
 
 `/sessions` 增加 `receiveAgeMilliseconds`、`transportLagGrowthMilliseconds`、`sourceObservationLagGrowthMilliseconds`、`receiverBufferedBytes`。积压为相对本连接/段最好观测的增长，不能视为绝对端到端延迟。
 
-`POST /ui/action` 新增 `fit`、`control-kind`（如 `aisac:false`）、`spatial-layer`（如 `source:false`、`distance-listener:true`、`listener:false`）。`live:true` 返回最新并恢复 30 秒；不影响游戏采集。`/ui/state` 增加起点、控制筛选与图层状态。
+`POST /ui/action` 新增 `fit`、`control-kind`（如 `aisac:false`）、`spatial-layer`（如 `source:false`、`distance-listener:true`、`listener:false`）。`live:true` 返回最新并保留当前时间范围；不影响游戏采集。`/ui/state` 增加起点、控制筛选与图层状态。
