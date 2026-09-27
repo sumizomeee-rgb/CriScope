@@ -36,6 +36,15 @@ public static class AssociationPresentation
         var ids = current == null ? [] : SourcePlaybackIds(current);
         return PlaybackPresentation.Group(events, time).Where(p => ids.Contains(p.Id)).ToArray();
     }
+    public static string[] CueCategories(WireEvent? info)
+    {
+        if(info==null||string.IsNullOrEmpty(info.raw))return [];
+        try {
+            using var doc=JsonDocument.Parse(info.raw);
+            if(!doc.RootElement.TryGetProperty("basis",out var basis)||basis.GetString()!="cue-config"||!doc.RootElement.TryGetProperty("categories",out var categories))return [];
+            return categories.EnumerateArray().Select(c=>c.GetString()??"").Where(c=>c.Length>0).Distinct().ToArray();
+        } catch(Exception ex) when(ex is JsonException or InvalidOperationException){return [];}
+    }
     public static WireEvent[] Categories(IEnumerable<WireEvent> events, string playback, double time) => events
         .Where(e => e.time <= time && e.kind == "category" && e.parentId == playback)
         .GroupBy(e => e.objectId).Select(g => g.OrderBy(e => e.time).ThenBy(e => e.seq).Last()).ToArray();

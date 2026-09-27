@@ -443,33 +443,57 @@ public sealed class TimelineControl : Control
     internal static string MetricName(WireEvent e) => MetricPresentation.Name(e);
     private void DrawResources(DrawingContext c)
     {
-        Text(c,"资源用量 · 名称展开趋势 · SDK 补充仅展示最新值",14,45,Palette.Good);
-        var allGroups=Events.Where(e=>e.kind=="metric"&&e.time<=End&&double.IsFinite(e.value)).GroupBy(e=>e.objectId+"/"+e.name).Select(g=>g.OrderBy(e=>e.time).ToArray()).Concat(SupplementMetrics.Where(e=>double.IsFinite(e.value)).Select(e=>new[]{e})).OrderBy(g=>(g[^1].name+g[^1].objectId).Contains("memory",StringComparison.OrdinalIgnoreCase)?0:(g[^1].name+g[^1].objectId).Contains("stream",StringComparison.OrdinalIgnoreCase)?1:2).ToArray();
-        bool Primary(WireEvent e) { var n=(e.name+e.objectId).ToLowerInvariant(); return n.Contains("memory")||n.Contains("stream")||n.Contains("voice")||n.Contains("声部"); }
-        var groups=allGroups.Where(g=>Primary(g[^1])||_expanded.Contains("technical-metrics")).ToArray();
-        if(allGroups.Length==0){Empty(c,"资源指标尚未提供","原生会话提供可观测指标；Atom / FS 内存需可选 SDK 扩展。");return;}double y=76-_vertical;int i=0;
+        Text(c,"资源用量",14,45,Palette.Good);
+        var groups=Events.Where(e=>e.kind=="metric"&&e.time<=End&&double.IsFinite(e.value)).GroupBy(e=>e.objectId+"/"+e.name).Select(g=>g.OrderBy(e=>e.time).ToArray()).Concat(SupplementMetrics.Where(e=>double.IsFinite(e.value)).Select(e=>new[]{e})).ToArray();
+        if(groups.Length==0){Empty(c,"资源指标尚未提供","Atom / FS 内存需可选 SDK 扩展。");return;}
+        string Section(WireEvent e) {
+            var n=(e.name+e.objectId).ToLowerInvariant();
+            if(e.entity=="voice-pool")return "pool-config";
+            if(n.Contains("memory"))return "memory";
+            if(n.Contains("stream")||n.Contains("流式"))return "streaming";
+            if(e.entity=="loudness")return "loudness";
+            if(n.Contains("voice")||n.Contains("声部")||n.Contains("播放实例"))return "usage";
+            return "technical-metrics";
+        }
+        double y=76-_vertical;
         using var clip=c.PushClip(new Rect(0,68,Bounds.Width,Math.Max(0,Bounds.Height-96)));
-        foreach(var all in groups)
+        foreach(var (id,title,fold) in new[]{("memory","内存",false),("streaming","Streaming",false),("usage","播放用量",false),("technical-metrics","技术性能指标",true),("loudness","响度",true),("pool-config","原生声池配置 · 待核验",true)})
         {
-            var last=all[^1];
-            if(MetricPresentation.IsStreamingPoolCapacity(last) && groups.Any(g=>g[^1].session==last.session && MetricPresentation.IsStreamingPoolUsed(g[^1])))continue;
-            var pool=MetricPresentation.IsStreamingPoolUsed(last);
-            var capacity=pool?groups.Select(g=>g[^1]).FirstOrDefault(e=>e.session==last.session && MetricPresentation.IsStreamingPoolCapacity(e)):null;
-            var supplement=SupplementMetrics.Contains(last);
-            var key="metric:"+last.name+last.objectId;
-            bool canExpand=!supplement&&!pool;
-            bool expanded=canExpand&&_expanded.Contains(key);
-            double h=expanded?116:48;
-            if(!VisibleRow(y,h)){y+=h;i++;continue;}
-            if(i++%2==0)c.FillRectangle(Palette.Alternate,new Rect(0,y,Bounds.Width,h));
-            RowName(c,(canExpand?(expanded?"− ":"+ "):"")+MetricName(last),y+6);
-            Text(c,pool?MetricPresentation.StreamingPool(last,capacity):MetricPresentation.Value(last),LabelWidth+14,y+7,Palette.Good,18);
-            Text(c,pool?"SDK · StandardStreaming 池":supplement?"SDK 补充 · 独立时钟":"最后观测 "+Stamp(last.time),LabelWidth+205,y+12,size:10);
-            if(canExpand)_expandHits.Add((new Rect(0,y,LabelWidth,h),key));
-            _hits.Add((new Rect(0,y,Bounds.Width,h),last));
-            if(expanded)DrawSeries(c,all,y+31,75,Palette.Good,false);
-            y+=h;
-        }if(!groups.Any(g=>(g[^1].name+g[^1].objectId).Contains("memory",StringComparison.OrdinalIgnoreCase)))Text(c,"Atom / FS 内存：此来源尚未提供",16,y+15,size:12);RowName(c,(_expanded.Contains("technical-metrics")?"− ":"+ ")+"技术性能指标",y+42);_expandHits.Add((new Rect(0,y+36,LabelWidth,36),"technical-metrics"));_contentHeight=y+_vertical+42;
+            var rows=groups.Where(g=>Section(g[^1])==id).ToArray();
+            if(rows.Length==0)continue;
+            bool open=!fold||_expanded.Contains(id);
+            if(VisibleRow(y,32)) {
+                c.FillRectangle(Palette.Panel,new Rect(8,y,Math.Max(0,Bounds.Width-16),32));
+                Text(c,(fold?(open?"▾  ":"▸  "):"")+title,18,y+8,Palette.Text,12);
+                if(fold)_expandHits.Add((new Rect(8,y,Math.Max(0,Bounds.Width-16),32),id));
+            }
+            y+=32;
+            if(open)foreach(var all in rows)
+            {
+                var last=all[^1];
+                if(MetricPresentation.IsStreamingPoolCapacity(last)&&rows.Any(g=>g[^1].session==last.session&&MetricPresentation.IsStreamingPoolUsed(g[^1])))continue;
+                bool pool=MetricPresentation.IsStreamingPoolUsed(last),supplement=SupplementMetrics.Contains(last);
+                var capacity=pool?rows.Select(g=>g[^1]).FirstOrDefault(e=>e.session==last.session&&MetricPresentation.IsStreamingPoolCapacity(e)):null;
+                var key="metric:"+last.name+last.objectId;
+                bool canExpand=!supplement&&!pool&&last.entity!="voice-pool"&&all.Select(e=>e.time).Distinct().Take(2).Count()>1;
+                bool expanded=canExpand&&_expanded.Contains(key);
+                double h=expanded?116:42;
+                if(VisibleRow(y,h)) {
+                    c.FillRectangle(Palette.Alternate,new Rect(18,y,Math.Max(0,Bounds.Width-36),h));
+                    c.DrawLine(new Pen(Palette.Border,2),new Point(18,y),new Point(18,y+h));
+                    Text(c,(canExpand?(expanded?"▾  ":"▸  "):"")+MetricName(last),30,y+10,Palette.Text,11);
+                    Text(c,pool?MetricPresentation.StreamingPool(last,capacity):MetricPresentation.Value(last),LabelWidth+30,y+9,Palette.Good,16);
+                    if(canExpand)_expandHits.Add((new Rect(20,y,LabelWidth,h),key));
+                    _hits.Add((new Rect(20,y,Math.Max(0,Bounds.Width-40),h),last));
+                    if(expanded)DrawSeries(c,all,y+31,75,Palette.Good,false);
+                }
+                y+=h;
+            }
+            y+=12;
+        }
+        _contentHeight=y+_vertical;
+        var maxScroll=Math.Max(0,_contentHeight+28-Bounds.Height);
+        if(_vertical>maxScroll){_vertical=maxScroll;Avalonia.Threading.Dispatcher.UIThread.Post(InvalidateVisual);}
     }
     private void DrawMixing(DrawingContext c)
     {

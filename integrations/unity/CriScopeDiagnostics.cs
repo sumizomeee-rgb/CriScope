@@ -20,7 +20,8 @@ namespace CriScope.Unity
         private CriScopeMonitor monitor;
         private string monitorNote;
         private bool subscribed, closing;
-        private float nextSample;
+        private float nextSample, nextMemorySample;
+        [Serializable] private sealed class CueMetadata { public string[] categories; public string basis = "cue-config"; }
         private readonly Dictionary<uint, int> blocks = new Dictionary<uint, int>();
         private readonly HashSet<uint> tracked = new HashSet<uint>();
         private readonly Dictionary<uint, float> cueMetadata = new Dictionary<uint, float>();
@@ -86,8 +87,12 @@ namespace CriScope.Unity
         private void Sample()
         {
             if (!CriAtomPlugin.IsLibraryInitialized()) { SetCaptureEnabled(false); return; }
-            Metric("memory.atom.bytes", Common.GetAtomMemoryUsage(), "SDK Atom allocator; bytes");
-            Metric("memory.fs.bytes", Common.GetFsMemoryUsage(), "SDK file-system allocator; bytes; not all audio memory");
+            if (Time.realtimeSinceStartup >= nextMemorySample)
+            {
+                nextMemorySample = Time.realtimeSinceStartup + 1f;
+                Metric("memory.atom.bytes", Common.GetAtomMemoryUsage(), "SDK Atom allocator; bytes");
+                Metric("memory.fs.bytes", Common.GetFsMemoryUsage(), "SDK file-system allocator; bytes; not all audio memory");
+            }
             var stream = CriAtomExVoicePool.GetNumUsedVoices(CriAtomExVoicePool.VoicePoolId.StandardStreaming);
             Metric("voices.streaming.used", stream.numUsedVoices, "SDK StandardStreaming pool");
             Metric("voices.streaming.capacity", stream.numPoolVoices, "SDK StandardStreaming pool capacity");
@@ -105,7 +110,13 @@ namespace CriScope.Unity
                 if (acb != null && !string.IsNullOrEmpty(source.cueName) && acb.GetCueInfo(source.cueName, out cue))
                 {
                     cueMetadata[playbackId] = Time.realtimeSinceStartup;
-                    bridge.Emit(new WireEvent { kind = "cue-info", objectId = "playback:" + playbackId, name = source.cueName, value = cue.length,
+                    var categoryNames = new List<string>();
+                    if (cue.categories != null) foreach (ushort index in cue.categories)
+                    {
+                        CriAtomExAcf.CategoryInfo category;
+                        if (index != ushort.MaxValue && CriAtomExAcf.GetCategoryInfoByIndex(index, out category) && !string.IsNullOrEmpty(category.name) && !categoryNames.Contains(category.name)) categoryNames.Add(category.name);
+                    }
+                    bridge.Emit(new WireEvent { kind = "cue-info", objectId = "playback:" + playbackId, name = source.cueName, value = cue.length, raw = JsonUtility.ToJson(new CueMetadata { categories = categoryNames.ToArray() }),
                         detail = "SDK Cue 标注时长（毫秒）；组件最新播放的可选信息，不等于 Voice 实际历时" });
                 }
             }

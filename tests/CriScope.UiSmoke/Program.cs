@@ -291,7 +291,7 @@ public sealed class SmokeApp : Application
                     Select(inspectSession);window.ApplyUiAction("range","199:205");
                     typeof(MainWindow).GetMethod("SelectEvent",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,[inspectRequest]);
                     window.ApplyUiAction("workspace","控制");
-                    Check(Field<StackPanel>("_details").GetVisualDescendants().OfType<TextBlock>().Any(x=>x.Text=="播放历时"),"暂停历史切页后详情仍使用恢复的时间范围，保留播放起止");
+                    Check(Field<StackPanel>("_details").GetVisualDescendants().OfType<TextBlock>().Any(x=>x.Text is "播放历时" or "已播放" or "本次观测"),"暂停历史切页后详情仍使用恢复的时间范围，保留播放起止");
                     window.ApplyUiAction("live","true");
                     inspectSession.Accept(new WireEvent {session=inspectSession.Id,seq=4,kind="metric",time=210,name="CPU",value=1});
                     await Task.Delay(400);
@@ -392,7 +392,7 @@ public sealed class SmokeApp : Application
                     window.ApplyUiAction("log-search","");
                     window.ApplyUiAction("theme","light");await Task.Delay(150);
                     var loggedStart=Field<ListBox>("_events").ItemsSource!.Cast<ListBoxItem>().Single(i=>i.Tag is WireEvent e&&e.seq==1);
-                    Check(((Grid)loggedStart.Content!).Children.OfType<TextBlock>().First().Text=="≈"+navSession.EstimateWallTime((WireEvent)loggedStart.Tag!)!.Value.ToLocalTime().ToString("HH:mm:ss.fff"),"日志使用会话锚点换算的毫秒钟表时间");
+                    Check(((Grid)loggedStart.Content!).Children.OfType<TextBlock>().First().Text==navSession.EstimateWallTime((WireEvent)loggedStart.Tag!)!.Value.ToLocalTime().ToString("HH:mm:ss.fff"),"日志使用会话锚点换算的毫秒钟表时间");
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v05-log-fixture.png"),window.CapturePng("window"));
                     Check(ControlPresentation.Group(navSession.ViewSnapshot(),4).Single(g=>g.Name=="Distance").Rows.Single().TargetLabel.Contains("Music Fixture"),"Player子行关联当前Cue名");
                     var noLink=WireEvent.Parse(navSource.ToJson());noLink.raw="{\"derived\":{\"links\":[]}}";noLink.time=5;noLink.seq=7;
@@ -402,7 +402,7 @@ public sealed class SmokeApp : Application
                     var selectedCard=Field<StackPanel>("_sessions").GetLogicalDescendants().OfType<Button>().Single(b=>b.Tag?.ToString()=="selected-client");
                     Check(selectedCard.BorderThickness.Left==1,"客户端选中框有实际厚度");
                     window.ApplyUiAction("workspace","Timeline");window.ApplyUiAction("select","1");
-                    Check(Field<StackPanel>("_details").Children.OfType<Grid>().Any(g=>g.Tag?.ToString()=="row:播放历时"&&g.ColumnDefinitions.Count==2),"播放详情使用两列属性表");
+                    Check(Field<StackPanel>("_details").Children.OfType<Grid>().Any(g=>g.Tag?.ToString()=="row:已播放"&&g.ColumnDefinitions.Count==2),"播放详情使用两列属性表");
                     var stopRequest=new WireEvent {kind="stop-request",entity="cue",objectId=navRequest.objectId,time=2,endReason="playback-stop",session=navSession.Id};
                     var stopping=PlaybackPresentation.Group(new[]{navRequest,new WireEvent{kind="play",entity="voice",objectId="vv",parentId=navRequest.objectId,time=1.1},stopRequest},3).Single();
                     Check(stopping.End==null&&stopping.StatusLabel=="停止中"&&stopping.StopRequestedAt==2,"停止请求不提前结束实例");
@@ -424,6 +424,35 @@ public sealed class SmokeApp : Application
                     Check(overlayTimeline.ExpandedKeys.All(k=>!k.StartsWith("spatial:")),"空间列表可独立关闭");
                     Check(EventLogPresentation.Includes(new WireEvent{kind="stop-request"},"请求停止")&&!EventLogPresentation.Includes(new WireEvent{kind="play"},"请求停止"),"停止请求可单独筛选");
                     Check(!EventLogPresentation.Includes(new WireEvent{kind="stop-request"},"播放结束"),"结束筛选不混入停止请求");
+                    Check(!EventLogPresentation.Includes(new WireEvent{kind="log",name="SoundVoice_Volume"},"异常与连接")&&EventLogPresentation.Includes(new WireEvent{kind="error"},"异常与连接"),"异常分类不混入原始协议");
+                    Check(EventLogPresentation.Includes(new WireEvent{kind="log",name="SoundVoice_Volume"},"原始协议（高级）")&&!EventLogPresentation.Includes(new WireEvent{kind="log",name="SoundVoice_Volume"},"全部"),"原始协议只在高级分类显示");
+                    Check(AssociationPresentation.CueCategories(new WireEvent{raw="{\"basis\":\"cue-config\",\"categories\":[\"Music\",\"Music\",\"Volume_Music\"]}"}).SequenceEqual(new[]{"Music","Volume_Music"}),"Cue配置分类去重并保留顺序");
+                    navSession.Accept(new WireEvent{session=navSession.Id,seq=20,time=3,kind="cue-info",name="Music Fixture",objectId=navRequest.objectId,parentId=navRequest.objectId,value=89846});
+                    Select(navSession);window.ApplyUiAction("workspace","Timeline");window.ApplyUiAction("range","0:4");window.ApplyUiAction("select","1");
+                    await Task.Delay(350);
+                    var drawer=Field<StackPanel>("_details");
+                    Check(drawer.Children.OfType<Grid>().Any(g=>g.Tag?.ToString()=="row:Cue 时长"),"Cue时长直接显示在详情一级");
+                    Check(!drawer.Children.OfType<Grid>().Any(g=>g.Tag?.ToString() is "row:事件发生于" or "row:结束原因"),"播放中无重复时间及尚未结束行");
+                    Check(!window.GetVisualDescendants().OfType<Button>().Any(b=>ToolTip.GetTip(b)?.ToString()=="日志面板"),"日志只有一个常驻入口");
+                    foreach(var testTheme in new[]{"dark","light"}) {
+                        window.ApplyUiAction("theme",testTheme);await Task.Delay(180);
+                        var fold=Field<StackPanel>("_details").GetVisualDescendants().OfType<Expander>().First(f=>f.Tag?.ToString()=="timing");
+                        var heading=fold.GetVisualDescendants().OfType<Button>().First();
+                        Click(heading);await Task.Delay(650);
+                        Check(fold.IsExpanded&&((Avalonia.Media.RotateTransform)fold.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().First().RenderTransform!).Angle==90,"折叠展开经过刷新箭头同步："+testTheme);
+                        File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v08-detail-"+testTheme+".png"),window.CapturePng("window"));
+                        Click(heading);await Task.Delay(350);
+                        Check(!fold.IsExpanded&&((Avalonia.Media.RotateTransform)fold.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().First().RenderTransform!).Angle==0,"折叠收起经过刷新箭头同步："+testTheme);
+                    }
+                    window.ApplyUiAction("theme","dark");
+                    var resourceSession=Meta(Guid.NewGuid().ToString("N"),"native","resource-test");sessions[resourceSession.Id]=resourceSession;
+                    resourceSession.Accept(new WireEvent{session=resourceSession.Id,seq=1,time=1,kind="metric",name="CRI CPU",objectId="CpuLoad",value=1,detail="%"});
+                    resourceSession.Accept(new WireEvent{session=resourceSession.Id,seq=2,time=2,kind="metric",name="CRI CPU",objectId="CpuLoad",value=2,detail="%"});
+                    resourceSession.Accept(new WireEvent{session=resourceSession.Id,seq=3,time=2,kind="metric",name="流式声池容量",entity="voice-pool",objectId="pool",value=65552});
+                    Select(resourceSession);window.ApplyUiAction("workspace","Performance");window.ApplyUiAction("range","0:3");
+                    var resourceTimeline=Field<TimelineControl>("_timeline");resourceTimeline.ExpandedKeys=["technical-metrics","pool-config","metric:CRI CPUCpuLoad"];
+                    resourceTimeline.InvalidateVisual();await Task.Delay(200);
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v08-resources.png"),window.CapturePng("window"));
                     Console.WriteLine($"结果：{passed}/{passed} UI 检查通过"); desktop.Shutdown(0);
                 }
                 catch (Exception ex) { Console.Error.WriteLine($"FAIL：已通过 {passed} 项；{ex}"); desktop.Shutdown(1); }

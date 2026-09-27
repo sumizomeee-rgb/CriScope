@@ -11,7 +11,7 @@ namespace CriScope.Unity
 {
     [Serializable] public sealed class WireEvent
     {
-        public string kind, session, name, objectId, detail, platform;
+        public string kind, session, name, objectId, detail, platform, raw;
         public string source = "cri-sdk";
         public long seq;
         public double time, value, x, y, z;

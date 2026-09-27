@@ -19,10 +19,10 @@ public sealed partial class MainWindow
     private Control BuildEventLog()
     {
         var panel = new Grid { RowDefinitions = new RowDefinitions("Auto,26,*,26") };
-        var bar = new Grid { ColumnDefinitions = new ColumnDefinitions("*,100,Auto,Auto,Auto"), Margin = new Thickness(12,5), ColumnSpacing=8 };
+        var bar = new Grid { ColumnDefinitions = new ColumnDefinitions("*,150,Auto,Auto,Auto"), Margin = new Thickness(12,5), ColumnSpacing=8 };
         var search = _logSearch = new TextBox { Text=_logQuery, PlaceholderText="搜索日志：开始播放 CueName、实例结束、AISAC…",FontSize=12 };
         search.TextChanged+=(_,_)=>{_logQuery=search.Text??""; UpdateEventLog();}; bar.Children.Add(search);
-        var kind = new ComboBox {ItemsSource=new[]{"全部","播放","请求播放","开始播放","请求停止","播放结束","控制","回调","诊断"},SelectedItem=_logKind,FontSize=11,HorizontalAlignment=HorizontalAlignment.Stretch};
+        var kind = new ComboBox {ItemsSource=new[]{"全部","播放","请求播放","开始播放","请求停止","播放结束","控制","回调","异常与连接","原始协议（高级）"},SelectedItem=_logKind,FontSize=11,HorizontalAlignment=HorizontalAlignment.Stretch};
         kind.SelectionChanged+=(_,_)=>{_logKind=kind.SelectedItem as string??"全部";UpdateEventLog();}; Grid.SetColumn(kind,1);bar.Children.Add(kind);
         _logFollowButton=Action(_logFollowing?"暂停刷新":"继续实时",ToggleLogFollow); Grid.SetColumn(_logFollowButton,2);bar.Children.Add(_logFollowButton);
         var earlier=Action("更早记录",()=>{_logLimit=Math.Min(20000,_logLimit+1000);UpdateEventLog();});Grid.SetColumn(earlier,3);bar.Children.Add(earlier);
@@ -31,7 +31,7 @@ public sealed partial class MainWindow
         ToolTip.SetTip(voices,"默认每个实例显示一次开始与结束；展开各 Voice 的分配和释放记录。");
         panel.Children.Add(bar);
         var headings=new Grid{ColumnDefinitions=new ColumnDefinitions("108,92,280,*"),ColumnSpacing=8,Margin=new Thickness(12,0),Background=_p.Alternate};
-        foreach(var (title,column) in new[]{("发生时间 ≈",0),("动作",1),("Cue / 对象",2),("内容",3)})
+        foreach(var (title,column) in new[]{("发生时间",0),("动作",1),("Cue / 对象",2),("内容",3)})
         {var label=Label(title,10,_p.Muted);Grid.SetColumn(label,column);headings.Children.Add(label);}
         Grid.SetRow(headings,1);panel.Children.Add(headings);
         _events = new ListBox { Background=_p.Canvas,BorderThickness=new Thickness(0),FontSize=11,Foreground=_p.Text,AutoScrollToSelectedItem=false };
@@ -86,7 +86,7 @@ public sealed partial class MainWindow
             foreach(var e in results)
             {
                 var line=new Grid{ColumnDefinitions=new ColumnDefinitions("108,92,280,*"),ColumnSpacing=8,Margin=new Thickness(0,2)};
-                line.Children.Add(Label((e.estimatedTime?"约 ":"")+WallTime(e.time,_session),11,_p.Muted));
+                line.Children.Add(Label(WallTime(e.time,_session),11,_p.Muted));
                 var action=Label(_logVoices&&e.entity=="voice"?(e.kind=="play"?"Voice 分配":"Voice 释放"):EventLogPresentation.Action(e),11,ControlPresentation.Kinds.Contains(e.kind)?_p.Control(e.kind):e.kind is "gap" or "error"?_p.Error:_p.Voice);Grid.SetColumn(action,1);line.Children.Add(action);
                 var logOwner=owners.GetValueOrDefault(e.entity=="cue"?e.objectId:e.parentId);
                 var name=Label(logOwner!=null?PlaybackLabel(logOwner):e.name,13);name.TextTrimming=TextTrimming.CharacterEllipsis;Grid.SetColumn(name,2);line.Children.Add(name);
@@ -100,7 +100,7 @@ public sealed partial class MainWindow
                 if(ControlPresentation.Kinds.Contains(e.kind)&&e.kind!="sequence")detail=e.name+" = "+detail;
                 var value=Label(detail,11,e.kind=="sequence"?_p.SequenceTag(e.name):_p.Muted);value.TextTrimming=TextTrimming.CharacterEllipsis;Grid.SetColumn(value,3);line.Children.Add(value);
                 var item=new ListBoxItem {Tag=e,Content=line,Padding=new Thickness(12,4)};
-                ToolTip.SetTip(item,$"{e.name}\n{detail}\n双击定位，单击查看详情");items.Add(item);
+                ToolTip.SetTip(item,$"{e.name}\n{detail}\n时间由接收锚点换算；详情中可查看原始时钟。\n双击定位，单击查看详情");items.Add(item);
             }
             if(items.Count==0)items.Add(new ListBoxItem{Content=Label("没有匹配记录；可以调整搜索词或日志分类",12,_p.Muted),IsEnabled=false});
             _events.ItemsSource=items;

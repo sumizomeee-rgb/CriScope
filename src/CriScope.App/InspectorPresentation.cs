@@ -28,6 +28,7 @@ public static class InspectorPresentation
     private static Control Merge(Control? old, Control next)
     {
         if (old == null || old.GetType() != next.GetType()) return next;
+        ToolTip.SetTip(old,ToolTip.GetTip(next));
         switch (old, next)
         {
             case (SelectableTextBlock a, SelectableTextBlock b):
