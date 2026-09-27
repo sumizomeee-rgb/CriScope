@@ -27,6 +27,9 @@ internal sealed class Palette(bool light)
     public IBrush Request => B(Light ? "#A36D20" : "#E6BA78");
     public IBrush Listener => B(Light ? "#386FB5" : "#88B5F6");
     public IBrush Hover => B(Light ? "#E6E0D5" : "#25303D");
+    public IBrush WorkspaceActive => B(Light ? "#E2DDD3" : "#26323F");
+    public IBrush WorkspaceActiveBorder => B(Light ? "#B1AAA0" : "#536374");
+    public IBrush WorkspaceHover => B(Light ? "#F3EFE7" : "#18222D");
     public IBrush Control(string kind) => ControlPresentation.Type(kind) switch
     {
         ControlKind.Aisac => B(Light ? "#7550AF" : "#BDA2E8"),

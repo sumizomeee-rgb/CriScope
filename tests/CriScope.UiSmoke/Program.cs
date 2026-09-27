@@ -118,7 +118,9 @@ public sealed class SmokeApp : Application
                         &&ControlTipStamp(axisTimeline,a.TimeOrigin)==controlWall.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.fff"),
                         "控制行只显示钟表时间，悬停提示保留完整日期");
                     var controlTab=window.GetVisualDescendants().OfType<Button>().Single(button=>button.Tag?.ToString()=="workspace:控制");
-                    Check(controlTab.BorderThickness.Bottom==0,"当前工作区标签不显示紫色下划线");
+                    Check(controlTab.BorderThickness==new Thickness(1)
+                        &&controlTab.BorderBrush?.ToString()!=Field<object>("_p").GetType().GetProperty("Selection")!.GetValue(Field<object>("_p"))!.ToString(),
+                        "当前工作区标签使用中性边框，不显示紫色下划线");
                     string AxisTip() => (string)typeof(TimelineControl).GetMethod("TimeAxisToggleTip",BindingFlags.Instance|BindingFlags.NonPublic)!
                         .Invoke(Field<TimelineControl>("_timeline"),null)!;
                     Check(axisTimeline.PreferWallTime

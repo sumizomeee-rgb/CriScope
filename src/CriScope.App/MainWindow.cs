@@ -176,10 +176,13 @@ public sealed partial class MainWindow : Window
                 label.FontWeight=selected?FontWeight.SemiBold:FontWeight.Normal;
         var tab=new Button {Content=content,FontSize=UiMetrics.ControlSize,
             Padding=new Thickness(UiMetrics.Space3,7),MinHeight=34,
-            Background=selected?_p.Panel:Brushes.Transparent,
-            BorderThickness=new Thickness(0),CornerRadius=new CornerRadius(0),Tag="workspace:"+text};
-        tab.PointerEntered+=(_,_)=>{if(!selected){tab.Background=_p.Hover;content.Opacity=1;}};
-        tab.PointerExited+=(_,_)=>{tab.Background=selected?_p.Panel:Brushes.Transparent;content.Opacity=selected?1:.82;};
+            Background=selected?_p.WorkspaceActive:Brushes.Transparent,
+            BorderBrush=selected?_p.WorkspaceActiveBorder:Brushes.Transparent,
+            BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(2),Tag="workspace:"+text};
+        tab.PointerEntered+=(_,_)=>{if(!selected){tab.Background=_p.WorkspaceHover;content.Opacity=1;}};
+        tab.PointerExited+=(_,_)=>{tab.Background=selected?_p.WorkspaceActive:Brushes.Transparent;content.Opacity=selected?1:.82;};
+        tab.GotFocus+=(_,_)=>tab.BorderBrush=_p.Text;
+        tab.LostFocus+=(_,_)=>tab.BorderBrush=selected?_p.WorkspaceActiveBorder:Brushes.Transparent;
         ToolTip.SetTip(tab,text);
         tab.Click+=(_,_)=>action();
         return tab;
