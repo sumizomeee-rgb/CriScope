@@ -29,6 +29,10 @@ public sealed partial class MainWindow
         var search = _logSearch = new TextBox { Width=280, Text=_logQuery, PlaceholderText="搜索日志：开始播放 CueName、实例结束、AISAC…",FontSize=12 };
         search.TextChanged+=(_,_)=>{_logQuery=search.Text??""; UpdateEventLog();}; bar.Children.Add(search);
         var kind = new ComboBox {Width=150,ItemsSource=new[]{"全部","播放相关（全部）","请求播放","接入时已在播放","开始播放","请求停止","播放结束","控制","回调","异常与连接","原始协议（高级）"},SelectedItem=_logKind,FontSize=11,HorizontalAlignment=HorizontalAlignment.Stretch};
+        kind.ItemTemplate=new FuncDataTemplate<string>((caption,_)=>{
+            var eventKind=caption switch {"请求播放"=>"request","接入时已在播放"=>"request","开始播放"=>"play","请求停止"=>"stop-request","播放结束"=>"stop","控制"=>"aisac","回调"=>"sequence","异常与连接"=>"error",_=>"log"};
+            return VisualLanguage.EventBadge(new WireEvent {kind=eventKind},caption??"全部",_p);
+        });
         kind.SelectionChanged+=(_,_)=>{_logKind=kind.SelectedItem as string??"全部";UpdateEventLog();}; Grid.SetColumn(kind,1);bar.Children.Add(kind);
         _logFollowButton=Action(_logFollowing?"暂停刷新":"继续实时",ToggleLogFollow); Grid.SetColumn(_logFollowButton,2);bar.Children.Add(_logFollowButton);
         ToolTip.SetTip(search,_relatedPlayback.Length>0?"仅关联实例；点击关联筛选 × 可退出":"搜索当前缓存中的事件");
@@ -114,7 +118,8 @@ public sealed partial class MainWindow
                 var badge=VisualLanguage.EventBadge(e,_logVoices&&e.entity=="voice"?(e.kind=="play"?"Voice 分配":"Voice 释放"):EventLogPresentation.Action(e),_p);
                 Grid.SetColumn(badge,1);line.Children.Add(badge);
                 var logOwner=owners.GetValueOrDefault(e.entity=="cue"?e.objectId:e.parentId);
-                var name=Label(logOwner!=null?PlaybackLabel(logOwner):e.name,13);name.TextTrimming=TextTrimming.CharacterEllipsis;Grid.SetColumn(name,2);line.Children.Add(name);
+                var targetName=e.kind is "aisac" or "selector"?ControlPresentation.TargetLabel(e.session,e.objectId,_timeline.ControlLabels):logOwner!=null?PlaybackLabel(logOwner):e.name;
+                var name=Label(targetName,13);name.TextTrimming=TextTrimming.CharacterEllipsis;Grid.SetColumn(name,2);line.Children.Add(name);
                 string detail=EventLogPresentation.Detail(e);
                 if(_logVoices&&e.entity=="voice")detail="Voice · "+detail;
                 var owner=owners.GetValueOrDefault(e.entity=="cue"?e.objectId:e.parentId);

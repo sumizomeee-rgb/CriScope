@@ -92,7 +92,7 @@ public static class ControlPresentation
     }
 
     private static string Key(params string[] parts) => System.Text.Json.JsonSerializer.Serialize(parts);
-    private static string TargetLabel(string session, string id, ControlIdentityLabels labels) => id.Length == 0 ? "对象未提供"
+    public static string TargetLabel(string session, string id, ControlIdentityLabels labels) => id.Length == 0 ? "对象未提供"
         : labels.Get(id.Split(':').Contains("category") ? "Category" : "Player", Key(session, id));
 
     public static string Value(WireEvent e) => e.kind switch

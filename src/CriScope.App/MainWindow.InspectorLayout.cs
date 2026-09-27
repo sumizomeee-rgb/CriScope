@@ -2,6 +2,8 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.LogicalTree;
+using Avalonia.Input.Platform;
 
 namespace CriScope.App;
 
@@ -12,7 +14,7 @@ public sealed partial class MainWindow
     {
         if (_selected == null) return;
         var more = new StackPanel { Spacing = 4 };
-        var links = new StackPanel { Tag = "inspector-links", Spacing = 4, Margin = new Thickness(0,12,0,8) };
+        var links = new StackPanel { Tag = "inspector-links", Spacing = 2, Margin = new Thickness(0,8,0,6) };
         var original = content.Children.ToArray();
         content.Children.Clear();
         void Flatten(Control item, StackPanel target)
@@ -66,9 +68,9 @@ public sealed partial class MainWindow
         foreach(var button in links.Children.OfType<Button>().ToArray())
         {
             var full=ToolTip.GetTip(button)?.ToString() ?? "定位";
-            var caption=button is NavigationButton nav?nav.Caption:full;
+            var caption=button is NavigationButton nav?nav.Caption switch {"定位空间音源"=>"空间音源","定位开始播放"=>"开始播放","定位事件时间"=>"事件时间",_=>nav.Caption}:full;
             button.Content=NavigationContent(caption);
-            button.Height=32;button.Padding=new Thickness(8,0);
+            button.Height=28;button.Padding=new Thickness(4,0);
             button.HorizontalAlignment=HorizontalAlignment.Left;
             button.VerticalContentAlignment=VerticalAlignment.Center;
             if(button is NavigationButton {RelatedName.Length:>0} related) {
@@ -82,10 +84,17 @@ public sealed partial class MainWindow
                 row.Children.Add(name);row.Children.Add(button);links.Children.Insert(index,row);
             }
         }
+        var actions=new WrapPanel {Orientation=Orientation.Horizontal};
+        foreach(var action in links.Children.OfType<NavigationButton>().ToArray()) {
+            links.Children.Remove(action);action.Margin=new Thickness(0,0,8,0);actions.Children.Add(action);
+        }
+        if(actions.Children.Count>0)links.Children.Add(actions);
         ArrangePlaybackFacts(content);
+        foreach(var text in content.GetLogicalDescendants().OfType<SelectableTextBlock>())
+            if(text.Tag?.ToString()=="inspector-title")AddCopyMenu(text,"复制 Cue 名称");
         if(links.Children.Count>0)content.Children.Add(links);
         if(more.Children.Count>0)content.Children.Add(new Expander {
-            Tag="more-information",Header="更多信息",Content=more,FontSize=13,
+            Tag="more-information",Header="更多信息",Content=more,FontSize=12,
             HorizontalAlignment=HorizontalAlignment.Stretch });
     }
 
@@ -107,7 +116,7 @@ public sealed partial class MainWindow
             var value=sheet.Children.OfType<SelectableTextBlock>().FirstOrDefault()?.Text??"未获取";
             var subtitle=new StackPanel {Tag="cue-sheet",Orientation=Orientation.Horizontal,Spacing=6,Margin=new Thickness(0,2,0,8)};
             subtitle.Children.Add(VisualLanguage.Glyph(IconKind.CueSheet,_p.Muted,14));
-            var text=Label("CueSheet / ACB · "+value,11,_p.Muted);text.TextTrimming=TextTrimming.CharacterEllipsis;text.MaxWidth=250;
+            var text=new SelectableTextBlock {Text=value,FontSize=11,Foreground=_p.Muted};AddCopyMenu(text,"复制 CueSheet / ACB 名称");text.TextTrimming=TextTrimming.CharacterEllipsis;text.MaxWidth=250;
             ToolTip.SetTip(subtitle,value+"\n"+ToolTip.GetTip(sheet));subtitle.Children.Add(text);
             content.Children.Insert(index>=0?index+1:Math.Min(2,content.Children.Count),subtitle);
         }
@@ -124,6 +133,13 @@ public sealed partial class MainWindow
         }
         var category=Take("categories")??Take("row:Category")??Take("row:Cue 分类");
         if(category!=null)content.Children.Add(category);
+    }
+
+    private void AddCopyMenu(SelectableTextBlock text,string caption)
+    {
+        var copy=new MenuItem {Header=caption};
+        copy.Click+=async (_,_)=>{if(Clipboard is {} clipboard)await clipboard.SetTextAsync(text.Text??"");};
+        text.ContextMenu=new ContextMenu {ItemsSource=new[]{copy}};
     }
 
     private Control NavigationContent(string caption)

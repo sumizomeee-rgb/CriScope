@@ -720,13 +720,13 @@ public sealed partial class MainWindow : Window
         }
         details.Children.Add(Label(e.kind switch
         {
-            "request" => "播放实例", "play" => "播放开始", "stop" => "声部结束", "stop-request" => "请求停止",
+            "request" => "播放实例", "play" => "开始播放", "stop" => "声部结束", "stop-request" => "请求停止",
             "aisac" => "AISAC 设置", "selector" => "Selector 设置", "block" => "Block 事件",
             "beat" => "节拍事件", "sequence" => "序列事件", "position" => "空间位置",
             "metric" => "资源指标", "cue-info" => "Cue 信息", "gap" => "数据缺口",
             "log" => "原始协议记录", "error" => "错误", "state" => "连接状态", _ => "事件记录"
         }, 12, ControlPresentation.Kinds.Contains(e.kind)?_p.Control(e.kind):_p.Muted));
-        details.Children.Add(new TextBlock { Tag="inspector-title", Text = e.name, FontSize = 17, Foreground = _p.Text, TextWrapping = TextWrapping.Wrap });
+        details.Children.Add(new SelectableTextBlock { Tag="inspector-title", Text = e.name, FontSize = 17, Foreground = _p.Text, TextWrapping = TextWrapping.Wrap });
         void Field(string label, string value)
         {
             var row=new Grid {Tag="row:"+label, ColumnDefinitions=new ColumnDefinitions("90,*"), ColumnSpacing=10, MinHeight=28, Margin=new Thickness(0)};
@@ -771,7 +771,7 @@ public sealed partial class MainWindow : Window
             }
             else {
                 var categoryRow=new Grid {Tag="categories",ColumnDefinitions=new ColumnDefinitions("90,*"),ColumnSpacing=10,Margin=new Thickness(0,6)};
-                categoryRow.Children.Add(Label("Category",12,_p.Muted));
+                var categoryLabel=Label("Category",12,_p.Muted);categoryLabel.VerticalAlignment=VerticalAlignment.Top;categoryRow.Children.Add(categoryLabel);
                 var chips=new WrapPanel();Grid.SetColumn(chips,1);categoryRow.Children.Add(chips);
                 foreach(var category in categories){var chip=Label(category.name,13);chip.Tag="category-info:"+category.objectId;chip.Margin=new Thickness(0,0,10,5);ToolTip.SetTip(chip,category.name);chips.Children.Add(chip);}
                 details.Children.Add(categoryRow);
@@ -793,8 +793,8 @@ public sealed partial class MainWindow : Window
             if(playback.CausePlaybackId.Length>0)
             {
                 var cause=groups.FirstOrDefault(g=>g.Id==playback.CausePlaybackId);
-                Field("触发实例",cause==null?"记录未保留":PlaybackLabel(cause));
-                if(cause?.Request is {} causeRequest) { var button=NavigationAction("定位触发实例",()=>Navigate("Timeline",causeRequest,true)); button.Tag="cause:"+cause.Id; details.Children.Add(button); }
+                Field("由谁触发",cause==null?"记录未保留":PlaybackLabel(cause));
+                if(cause?.Request is {} causeRequest) { var row=(Grid)details.Children.Last();row.ColumnDefinitions=new ColumnDefinitions("90,*,28");var button=IconAction("定位触发此结束的播放实例",IconKind.Locate,()=>Navigate("Timeline",causeRequest,true));button.Width=28;button.Height=28;button.Tag="cause:"+cause.Id;Grid.SetColumn(button,2);row.Children.Add(button); }
             }
             AddAssociations(details,e,playback);
             var playerDetails=new StackPanel {Spacing=6};

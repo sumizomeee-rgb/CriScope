@@ -113,6 +113,7 @@ public sealed class TimelineControl : Control
     private double _scrollGrab;
     private int _busCount, _busChannels;
     private readonly List<(Rect rect, WireEvent item)> _hits = [];
+    private readonly List<Rect> _relatedCueBounds = [];
     private readonly List<(Rect rect, string key)> _expandHits = [];
     private readonly HashSet<string> _expanded = [];
     private readonly List<(Rect rect, string key)> _toggleHits = [];
@@ -247,7 +248,7 @@ public sealed class TimelineControl : Control
     {Text(c,title,26,105,Palette.Text,18);Text(c,description,26,141,size:12);}
     public override void Render(DrawingContext c)
     {
-        base.Render(c);c.FillRectangle(Palette.Canvas,new Rect(Bounds.Size));_links.Clear();_hits.Clear();_expandHits.Clear();_toggleHits.Clear();_spatialHits.Clear();_spatialListHits.Clear();SpatialOverlayBounds=default;SpatialOverlayMaxScroll=0;_spatialExpandedKey=null;
+        _relatedCueBounds.Clear();base.Render(c);c.FillRectangle(Palette.Canvas,new Rect(Bounds.Size));_links.Clear();_hits.Clear();_expandHits.Clear();_toggleHits.Clear();_spatialHits.Clear();_spatialListHits.Clear();SpatialOverlayBounds=default;SpatialOverlayMaxScroll=0;_spatialExpandedKey=null;
         if(Events.Length==0&&SupplementMetrics.Length==0){Empty(c,"等待音频观测","在游戏里开启 CriScope 采集，或打开已有日志。");return;}
         if(Mode=="Location"){DrawLocations(c);return;}if(Mode=="Mixing"){DrawMixing(c);DrawScrollHint(c);return;}
         double step=Math.Pow(10,Math.Floor(Math.Log10(ViewSpan/8)));if(ViewSpan/step>16)step*=5;else if(ViewSpan/step>10)step*=2;
@@ -255,7 +256,15 @@ public sealed class TimelineControl : Control
         Text(c,"距本次采集开始",12,10,size:10);c.DrawLine(new Pen(Palette.Border),new Point(0,34),new Point(Bounds.Width,34));
         if(Mode=="AISAC")DrawControls(c);else if(Mode=="Performance")DrawResources(c);else DrawTracks(c);
         if(SelectionStart is {} a&&SelectionEnd is {} b&&Math.Abs(a-b)>.000001){var l=Math.Clamp(X(Math.Min(a,b)),LabelWidth,LabelWidth+PlotWidth);var r=Math.Clamp(X(Math.Max(a,b)),LabelWidth,LabelWidth+PlotWidth);c.DrawRectangle(null,new Pen(Palette.Selection,1.5),new Rect(l,35,Math.Max(0,r-l),Math.Max(0,Bounds.Height-64)));}
-        if(Selected is {} selected&&selected.time>=Start&&selected.time<=End)c.DrawLine(new Pen(Palette.Selection,1),new Point(X(selected.time),35),new Point(X(selected.time),Bounds.Height-28));
+        if(Selected is {} selected&&selected.time>=Start&&selected.time<=End) {
+            var x=X(selected.time);double top=35,bottom=Bounds.Height-28;
+            foreach(var rect in _relatedCueBounds.Where(r=>x>=r.Left&&x<=r.Right).OrderBy(r=>r.Top)) {
+                var end=Math.Clamp(rect.Top,top,bottom);
+                if(end>top)c.DrawLine(new Pen(Palette.Selection,1),new Point(x,top),new Point(x,end));
+                top=Math.Clamp(Math.Max(top,rect.Bottom),top,bottom);
+            }
+            if(top<bottom)c.DrawLine(new Pen(Palette.Selection,1),new Point(x,top),new Point(x,bottom));
+        }
         c.FillRectangle(Palette.Canvas,new Rect(0,Bounds.Height-28,Bounds.Width,28));Text(c,"Ctrl 滚轮缩放 · 中键 / 空格拖动浏览历史 · Shift 拖动选区",12,Bounds.Height-21,size:10);
         if(Live)Text(c,SourceConnected?"实时":"已断开",Bounds.Width-64,Bounds.Height-21,SourceConnected?Palette.Good:Palette.Request,10);
     }
@@ -426,6 +435,8 @@ public sealed class TimelineControl : Control
     private double ControlRowHeight(ControlRow row)=>54+(_expanded.Contains("related:"+row.Key)?RelatedOwners(row).Length*32:0);
     private void DrawRelatedCue(DrawingContext c,PlaybackGroup owner,double x,double y,double width)
     {
+        _relatedCueBounds.Add(new Rect(x,y,width,28));
+        c.FillRectangle(Palette.Panel,new Rect(x,y,width,28));
         var identity=ControlLabels.Get("播放实例",JsonSerializer.Serialize(new[]{owner.Request?.session??"",owner.Id})).Replace("播放实例 ","");
         double idWidth=Math.Max(32,identity.Length*7),buttonX=x+width-28;
         using(c.PushClip(new Rect(x,y,Math.Max(0,width-idWidth-36),22)))Text(c,owner.Name,x,y+4,Palette.Text,11);
@@ -590,7 +601,7 @@ public sealed class TimelineControl : Control
             SpatialOverlayBounds=new Rect(Math.Max(20,Bounds.Width-overlayWidth-16),112,overlayWidth,overlayHeight);
             _spatialExpandedKey=expanded.Key;
         }
-        double plotRight=expanded!=null&&Bounds.Width>600?SpatialOverlayBounds.Left-16:Bounds.Width-30;
+        double plotRight=Bounds.Width-30;
         double cx=(positions.Min(e=>e.x)+positions.Max(e=>e.x))/2,cz=(positions.Min(e=>e.z)+positions.Max(e=>e.z))/2;
         var extent=Math.Max(2,positions.Max(e=>Math.Max(Math.Abs(e.x-cx),Math.Abs(e.z-cz))))*1.25;
         if(positions.FirstOrDefault(e=>e.objectId==SpatialFocusId) is {} focus) {cx=focus.x;cz=focus.z;}

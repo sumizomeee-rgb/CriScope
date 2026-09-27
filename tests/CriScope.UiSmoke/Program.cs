@@ -425,7 +425,10 @@ public sealed class SmokeApp : Application
                     Check(overlayTimeline.SpatialOverlayBounds.Height>0&&overlayTimeline.SpatialOverlayMaxScroll>0,"同点列表限高且支持滚动");
                     Check(ToolTip.GetTip(overlayTimeline)==null,"列表打开没有旧tooltip遮挡");
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v06-spatial-overlay.png"),window.CapturePng("window"));
+                    var beforeOverlay=((List<(Rect rect,WireEvent? item,string? key)>)typeof(TimelineControl).GetField("_spatialHits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(overlayTimeline)!).Select(x=>x.rect).ToArray();
                     overlayTimeline.CloseSpatialList();window.CapturePng("window");
+                    var afterOverlay=((List<(Rect rect,WireEvent? item,string? key)>)typeof(TimelineControl).GetField("_spatialHits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(overlayTimeline)!).Select(x=>x.rect).ToArray();
+                    Check(beforeOverlay.SequenceEqual(afterOverlay),"空间列表开关不改变画布对象位置");
                     Check(overlayTimeline.ExpandedKeys.All(k=>!k.StartsWith("spatial:")),"空间列表可独立关闭");
                     Check(EventLogPresentation.Includes(new WireEvent{kind="stop-request"},"请求停止")&&!EventLogPresentation.Includes(new WireEvent{kind="play"},"请求停止"),"停止请求可单独筛选");
                     Check(!EventLogPresentation.Includes(new WireEvent{kind="stop-request"},"播放结束"),"结束筛选不混入停止请求");
@@ -438,6 +441,12 @@ public sealed class SmokeApp : Application
                     var drawer=Field<StackPanel>("_details");
                     Check(drawer.Children.OfType<Grid>().Any(g=>g.Tag?.ToString()=="duration-summary"),"Cue时长直接显示在详情一级");
                     Check(drawer.Children.OfType<Expander>().Count()==1 && drawer.Children.OfType<Expander>().Single().Header?.ToString()=="更多信息","详情仅有一个更多信息折叠");
+                    var cueText=drawer.GetVisualDescendants().OfType<SelectableTextBlock>().First(x=>x.Tag?.ToString()=="inspector-title");
+                    Check(cueText.ContextMenu!=null,"Cue 名称可选择并复制完整名称");
+                    var sheetText=drawer.Children.OfType<StackPanel>().Single(x=>x.Tag?.ToString()=="cue-sheet").Children.OfType<SelectableTextBlock>().Single();
+                    Check(sheetText.Text=="MusicSheet" && sheetText.ContextMenu!=null,"CueSheet 名称支持独立复制");
+                    var categoryGrid=drawer.Children.OfType<Grid>().FirstOrDefault(x=>x.Tag?.ToString()=="categories");
+                    Check(categoryGrid==null||categoryGrid.Children[0].VerticalAlignment==Avalonia.Layout.VerticalAlignment.Top,"Category 标签与首行对齐");
                     var morePanel=(StackPanel)drawer.Children.OfType<Expander>().Single().Content!;
                     Check(!morePanel.Children.OfType<Expander>().Any(),"更多信息不再套多层折叠");
                     Check(drawer.Children.OfType<StackPanel>().Any(p=>p.Tag?.ToString()=="inspector-links"),"所有主要定位集中在同一区域");
@@ -451,7 +460,7 @@ public sealed class SmokeApp : Application
                         var heading=fold.GetVisualDescendants().OfType<Button>().First();
                         Click(heading);await Task.Delay(650);
                         Check(fold.IsExpanded&&((Avalonia.Media.RotateTransform)fold.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().First().RenderTransform!).Angle==90,"折叠展开经过刷新箭头同步："+testTheme);
-                        File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v10-detail-"+testTheme+".png"),window.CapturePng("window"));
+                        File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v11-detail-"+testTheme+".png"),window.CapturePng("window"));
                         Click(heading);await Task.Delay(350);
                         Check(!fold.IsExpanded&&((Avalonia.Media.RotateTransform)fold.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().First().RenderTransform!).Angle==0,"折叠收起经过刷新箭头同步："+testTheme);
                     }
@@ -464,7 +473,7 @@ public sealed class SmokeApp : Application
                     var eventMore=(StackPanel)eventDrawer.Children.OfType<Expander>().Single().Content!;
                     var historicalDuration=eventMore.Children.OfType<Grid>().First(g=>g.Tag?.ToString()=="row:已播放").Children.OfType<SelectableTextBlock>().Single().Text;
                     Check(historicalDuration=="0.000 秒","历史开始事件详情不随实时播放累计");
-                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v10-event-detail.png"),window.CapturePng("window"));
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v11-event-detail.png"),window.CapturePng("window"));
                     for(int i=0;i<12;i++)navSession.Accept(new WireEvent{session=navSession.Id,seq=30+i,time=3+i*.01,kind="aisac",objectId="2:p",name="Distance",value=i});
                     window.ApplyUiAction("workspace","Timeline");window.ApplyUiAction("range","0:4");window.ApplyUiAction("select","1");await Task.Delay(350);
                     var preview=(StackPanel)Field<StackPanel>("_details").Children.OfType<Expander>().Single().Content!;
@@ -472,6 +481,13 @@ public sealed class SmokeApp : Application
                     navSession.Accept(new WireEvent{session=navSession.Id,seq=99,time=3.5,kind="aisac",objectId="unrelated-player",name="Unrelated",value=5});
                     typeof(MainWindow).GetMethod("ShowRelatedLog",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,[navRequest.objectId]);await Task.Delay(350);
                     Check(Field<ListBox>("_events").ItemsSource!.Cast<ListBoxItem>().Count(i=>i.Tag is WireEvent e && e.kind=="aisac")>=12,"全部关联记录包含Player上的AISAC设置");
+                    var settingRow=Field<ListBox>("_events").ItemsSource!.Cast<ListBoxItem>().First(i=>i.Tag is WireEvent e&&e.kind=="aisac");
+                    Check(((Grid)settingRow.Content!).Children.OfType<TextBlock>().Any(t=>Grid.GetColumn(t)==2&&t.Text!.StartsWith("Player #")),"AISAC 日志显示作用 Player 而不是参数名称");
+                    var kindMenu=window.GetVisualDescendants().OfType<ComboBox>().First(x=>x.ItemsSource?.Cast<object>().Contains("播放相关（全部）")==true);
+                    Check(kindMenu.ItemTemplate!=null,"日志筛选共享 SVG 颜色模板");
+                    kindMenu.IsDropDownOpen=true;await Task.Delay(180);
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v11-filter.png"),window.CapturePng("window"));kindMenu.IsDropDownOpen=false;
+
                     Check(!Field<ListBox>("_events").ItemsSource!.Cast<ListBoxItem>().Any(i=>i.Tag is WireEvent e && e.name=="Unrelated"),"关联日志不混入其他Player的设置");
                     // Long names and two same-name instances must preserve separate navigation targets.
                     foreach(var request in controlSession.ViewSnapshot().Where(e=>e.kind=="request"))request.name="Long_Music_Cue_同名并发实例_abcdefghijklmnopqrstuvwxyz";
@@ -480,7 +496,7 @@ public sealed class SmokeApp : Application
                     var controlRows=ControlPresentation.Group(Field<WireEvent[]>("_snapshot"),20,labels:compactTimeline.ControlLabels);
                     compactTimeline.ExpandedKeys=controlRows.Select(g=>g.Key).Concat(controlRows.SelectMany(g=>g.Rows).Select(r=>"related:"+r.Key)).ToArray();
                     window.Width=1000;window.Height=740;compactTimeline.InvalidateVisual();await Task.Delay(250);
-                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v10-multi-narrow.png"),window.CapturePng("window"));
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v11-multi-narrow.png"),window.CapturePng("window"));
                     Check(compactTimeline.Bounds.Width>300,"窄窗口保留控制工作区");
                     window.Width=1480;window.Height=900;await Task.Delay(150);
                     var resourceSession=Meta(Guid.NewGuid().ToString("N"),"native","resource-test");sessions[resourceSession.Id]=resourceSession;

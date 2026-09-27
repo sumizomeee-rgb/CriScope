@@ -35,8 +35,8 @@ public sealed partial class MainWindow
                 var panel=new StackPanel {Spacing=4};
                 var heading=new Grid {ColumnDefinitions=new ColumnDefinitions("18,*"),ColumnSpacing=7};
                 var arrow=new Avalonia.Controls.Shapes.Path {Data=Geometry.Parse("M5,3 L12,10 L5,17"),Stroke=_p.Muted,StrokeThickness=1.5,Width=10,Height=12,Stretch=Stretch.Uniform,VerticalAlignment=VerticalAlignment.Center,RenderTransformOrigin=RelativePoint.Center};
-                var title=new ContentPresenter {FontSize=13,VerticalAlignment=VerticalAlignment.Center};title.Bind(ContentPresenter.ContentProperty,new Binding("Header"){Source=owner});Grid.SetColumn(title,1);heading.Children.Add(arrow);heading.Children.Add(title);
-                var toggle=new Button {Content=heading,Height=32,Padding=new Thickness(6,0),Background=Brushes.Transparent,BorderThickness=new Thickness(0),HorizontalAlignment=HorizontalAlignment.Stretch,HorizontalContentAlignment=HorizontalAlignment.Stretch};
+                var title=new ContentPresenter {FontSize=12,VerticalAlignment=VerticalAlignment.Center};title.Bind(ContentPresenter.ContentProperty,new Binding("Header"){Source=owner});Grid.SetColumn(title,1);heading.Children.Add(arrow);heading.Children.Add(title);
+                var toggle=new Button {Content=heading,Height=28,Padding=new Thickness(6,0),Background=Brushes.Transparent,BorderThickness=new Thickness(0),HorizontalAlignment=HorizontalAlignment.Stretch,HorizontalContentAlignment=HorizontalAlignment.Stretch};
                 toggle.Click+=(_,_)=>owner.IsExpanded=!owner.IsExpanded;
                 void Rotate()=>arrow.RenderTransform=new RotateTransform(owner.IsExpanded?90:0);
                 Rotate();owner.PropertyChanged+=(_,change)=>{if(change.Property==Expander.IsExpandedProperty)Rotate();};
