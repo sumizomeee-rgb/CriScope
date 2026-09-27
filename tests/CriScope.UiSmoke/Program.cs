@@ -365,6 +365,11 @@ public sealed class SmokeApp : Application
                     var navSession=Meta(Guid.NewGuid().ToString("N"),"native","nav");sessions[navSession.Id]=navSession;
                     var navRequest=new WireEvent {session=navSession.Id,seq=1,time=1,kind="request",entity="cue",objectId="2:playback:1:9",parentId="2:p",name="Music Fixture"};
                     var navSource=new WireEvent {session=navSession.Id,seq=3,time=2,kind="position",entity="source",objectId="2:source",epoch=2,name="Music Fixture",x=3,z=5,raw="{\"derived\":{\"links\":[{\"playback\":\"playback:1:9\",\"cue\":\"Music Fixture\"}]}}"};
+                    navRequest.raw="{\"parameters\":[{\"name\":\"Acb Name\",\"value\":\"MusicSheet\"}]}";
+                    Check(CueMetadataPresentation.AcbName(navRequest)=="MusicSheet","CueSheet读取所属实例原生ACB名");
+                    Check(CueMetadataPresentation.AcbName(new WireEvent{raw="{}"})=="","缺少ACB不猜测CueSheet");
+                    var hotAttach=new WireEvent{kind="request",detail="连接时已有播放；起点未知"};
+                    Check(EventLogPresentation.Action(hotAttach)=="接入时已在播放"&&!EventLogPresentation.Includes(hotAttach,"请求播放"),"热接入不伪装成新播放请求");
                     navSession.Accept(navRequest);
                     navSession.Accept(new WireEvent {session=navSession.Id,seq=2,time=1.1,kind="play",entity="voice",objectId="2:v",parentId=navRequest.objectId,name="Music Fixture"});navSession.Accept(navSource);
                     navSession.Accept(new WireEvent {session=navSession.Id,seq=4,time=2,kind="category",entity="category",objectId="2:category-index:1",parentId=navRequest.objectId,name="Music"});
@@ -402,7 +407,7 @@ public sealed class SmokeApp : Application
                     var selectedCard=Field<StackPanel>("_sessions").GetLogicalDescendants().OfType<Button>().Single(b=>b.Tag?.ToString()=="selected-client");
                     Check(selectedCard.BorderThickness.Left==1,"客户端选中框有实际厚度");
                     window.ApplyUiAction("workspace","Timeline");window.ApplyUiAction("select","1");
-                    Check(Field<StackPanel>("_details").Children.OfType<Grid>().Any(g=>g.Tag?.ToString()=="row:已播放"&&g.ColumnDefinitions.Count==2),"播放详情使用两列属性表");
+                    Check(Field<StackPanel>("_details").Children.OfType<Grid>().Any(g=>g.Tag?.ToString()=="duration-summary"&&g.ColumnDefinitions.Count==2),"播放详情使用双列时长摘要");
                     var stopRequest=new WireEvent {kind="stop-request",entity="cue",objectId=navRequest.objectId,time=2,endReason="playback-stop",session=navSession.Id};
                     var stopping=PlaybackPresentation.Group(new[]{navRequest,new WireEvent{kind="play",entity="voice",objectId="vv",parentId=navRequest.objectId,time=1.1},stopRequest},3).Single();
                     Check(stopping.End==null&&stopping.StatusLabel=="停止中"&&stopping.StopRequestedAt==2,"停止请求不提前结束实例");
@@ -431,24 +436,53 @@ public sealed class SmokeApp : Application
                     Select(navSession);window.ApplyUiAction("workspace","Timeline");window.ApplyUiAction("range","0:4");window.ApplyUiAction("select","1");
                     await Task.Delay(350);
                     var drawer=Field<StackPanel>("_details");
-                    Check(drawer.Children.OfType<Grid>().Any(g=>g.Tag?.ToString()=="row:Cue 时长"),"Cue时长直接显示在详情一级");
+                    Check(drawer.Children.OfType<Grid>().Any(g=>g.Tag?.ToString()=="duration-summary"),"Cue时长直接显示在详情一级");
                     Check(drawer.Children.OfType<Expander>().Count()==1 && drawer.Children.OfType<Expander>().Single().Header?.ToString()=="更多信息","详情仅有一个更多信息折叠");
                     var morePanel=(StackPanel)drawer.Children.OfType<Expander>().Single().Content!;
                     Check(!morePanel.Children.OfType<Expander>().Any(),"更多信息不再套多层折叠");
                     Check(drawer.Children.OfType<StackPanel>().Any(p=>p.Tag?.ToString()=="inspector-links"),"所有主要定位集中在同一区域");
                     Check(!drawer.Children.OfType<Grid>().Any(g=>g.Tag?.ToString() is "row:事件发生于" or "row:结束原因"),"播放中无重复时间及尚未结束行");
                     Check(!window.GetVisualDescendants().OfType<Button>().Any(b=>ToolTip.GetTip(b)?.ToString()=="日志面板"),"日志只有一个常驻入口");
+                    Check(drawer.Children.OfType<Grid>().Any(g=>g.Tag?.ToString()=="playback-heading"),"实例编号保留在一级标题");
+                    Check(!drawer.Children.OfType<Grid>().Any(g=>g.Tag?.ToString()=="row:结束播放"),"播放中不显示红色空结束行");
                     foreach(var testTheme in new[]{"dark","light"}) {
                         window.ApplyUiAction("theme",testTheme);await Task.Delay(180);
                         var fold=Field<StackPanel>("_details").GetVisualDescendants().OfType<Expander>().First(f=>f.Tag?.ToString()=="more-information");
                         var heading=fold.GetVisualDescendants().OfType<Button>().First();
                         Click(heading);await Task.Delay(650);
                         Check(fold.IsExpanded&&((Avalonia.Media.RotateTransform)fold.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().First().RenderTransform!).Angle==90,"折叠展开经过刷新箭头同步："+testTheme);
-                        File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v09-detail-"+testTheme+".png"),window.CapturePng("window"));
+                        File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v10-detail-"+testTheme+".png"),window.CapturePng("window"));
                         Click(heading);await Task.Delay(350);
                         Check(!fold.IsExpanded&&((Avalonia.Media.RotateTransform)fold.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().First().RenderTransform!).Angle==0,"折叠收起经过刷新箭头同步："+testTheme);
                     }
                     window.ApplyUiAction("theme","dark");
+                    // Historical event details must remain tied to the selected event, not live End.
+                    window.ApplyUiAction("workspace","Logs");window.ApplyUiAction("select","2");await Task.Delay(650);
+                    var eventDrawer=Field<StackPanel>("_details");
+                    Check(eventDrawer.Children.OfType<Grid>().Any(g=>g.Tag?.ToString()=="row:发生时间"),"日志选中事件保留自身发生时间");
+                    Check(Field<ListBox>("_events").SelectedItem is ListBoxItem {Tag:WireEvent selectedLog} && selectedLog.seq==2,"日志高亮与抽屉事件保持一致");
+                    var eventMore=(StackPanel)eventDrawer.Children.OfType<Expander>().Single().Content!;
+                    var historicalDuration=eventMore.Children.OfType<Grid>().First(g=>g.Tag?.ToString()=="row:已播放").Children.OfType<SelectableTextBlock>().Single().Text;
+                    Check(historicalDuration=="0.000 秒","历史开始事件详情不随实时播放累计");
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v10-event-detail.png"),window.CapturePng("window"));
+                    for(int i=0;i<12;i++)navSession.Accept(new WireEvent{session=navSession.Id,seq=30+i,time=3+i*.01,kind="aisac",objectId="2:p",name="Distance",value=i});
+                    window.ApplyUiAction("workspace","Timeline");window.ApplyUiAction("range","0:4");window.ApplyUiAction("select","1");await Task.Delay(350);
+                    var preview=(StackPanel)Field<StackPanel>("_details").Children.OfType<Expander>().Single().Content!;
+                    Check(preview.Children.OfType<Grid>().Count(g=>g.Children.OfType<Button>().Any())<=3,"大量关联设置只预览最近三条");
+                    navSession.Accept(new WireEvent{session=navSession.Id,seq=99,time=3.5,kind="aisac",objectId="unrelated-player",name="Unrelated",value=5});
+                    typeof(MainWindow).GetMethod("ShowRelatedLog",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,[navRequest.objectId]);await Task.Delay(350);
+                    Check(Field<ListBox>("_events").ItemsSource!.Cast<ListBoxItem>().Count(i=>i.Tag is WireEvent e && e.kind=="aisac")>=12,"全部关联记录包含Player上的AISAC设置");
+                    Check(!Field<ListBox>("_events").ItemsSource!.Cast<ListBoxItem>().Any(i=>i.Tag is WireEvent e && e.name=="Unrelated"),"关联日志不混入其他Player的设置");
+                    // Long names and two same-name instances must preserve separate navigation targets.
+                    foreach(var request in controlSession.ViewSnapshot().Where(e=>e.kind=="request"))request.name="Long_Music_Cue_同名并发实例_abcdefghijklmnopqrstuvwxyz";
+                    Select(controlSession);window.ApplyUiAction("workspace","AISAC");window.ApplyUiAction("filter","");window.ApplyUiAction("range","0:20");
+                    var compactTimeline=Field<TimelineControl>("_timeline");
+                    var controlRows=ControlPresentation.Group(Field<WireEvent[]>("_snapshot"),20,labels:compactTimeline.ControlLabels);
+                    compactTimeline.ExpandedKeys=controlRows.Select(g=>g.Key).Concat(controlRows.SelectMany(g=>g.Rows).Select(r=>"related:"+r.Key)).ToArray();
+                    window.Width=1000;window.Height=740;compactTimeline.InvalidateVisual();await Task.Delay(250);
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v10-multi-narrow.png"),window.CapturePng("window"));
+                    Check(compactTimeline.Bounds.Width>300,"窄窗口保留控制工作区");
+                    window.Width=1480;window.Height=900;await Task.Delay(150);
                     var resourceSession=Meta(Guid.NewGuid().ToString("N"),"native","resource-test");sessions[resourceSession.Id]=resourceSession;
                     resourceSession.Accept(new WireEvent{session=resourceSession.Id,seq=1,time=1,kind="metric",name="CRI CPU",objectId="CpuLoad",value=1,detail="%"});
                     resourceSession.Accept(new WireEvent{session=resourceSession.Id,seq=2,time=2,kind="metric",name="CRI CPU",objectId="CpuLoad",value=2,detail="%"});

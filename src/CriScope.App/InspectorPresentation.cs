@@ -33,6 +33,7 @@ public static class InspectorPresentation
         {
             case (SelectableTextBlock a, SelectableTextBlock b):
                 if (a.Text != b.Text) a.Text = b.Text;
+                a.FontSize=b.FontSize;a.FontWeight=b.FontWeight;a.Foreground=b.Foreground;
                 return a;
             case (TextBlock a, TextBlock b):
                 if (a.Text != b.Text) a.Text = b.Text;

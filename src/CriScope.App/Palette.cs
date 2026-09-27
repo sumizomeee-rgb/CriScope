@@ -28,6 +28,12 @@ internal sealed class Palette(bool light)
         ControlKind.BeatSync => B(Light ? "#237C71" : "#75C8B4"),
         ControlKind.Sequence => B(Light ? "#3B6FAF" : "#8FB9F0"), _ => Muted
     };
+    public IBrush Semantic(SemanticColor color)=>color switch {
+        SemanticColor.Selected=>Selection,SemanticColor.Started=>Good,SemanticColor.Ended=>Error,
+        SemanticColor.Warning=>Signal,SemanticColor.Source=>Voice,SemanticColor.Listener=>Listener,
+        SemanticColor.Aisac=>Control("aisac"),SemanticColor.Selector=>Control("selector"),
+        SemanticColor.Block=>Control("block"),SemanticColor.Beat=>Control("beat"),
+        SemanticColor.Sequence=>Control("sequence"),SemanticColor.Text=>Text,_=>Muted };
     public IBrush SequenceTag(string tag)
     {
         // FNV-1a is stable across processes, unlike string.GetHashCode().

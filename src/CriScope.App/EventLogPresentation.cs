@@ -14,14 +14,15 @@ public static class EventLogPresentation
     }
     public static string Action(WireEvent e) => e.kind switch
     {
-        "request" => "请求播放", "play" => "开始播放", "stop-request" => "请求停止", "stop" when e.entity == "voice" => "声部结束",
+        "request" when PlaybackPresentation.IsUnknownStart(e) => "接入时已在播放", "request" => "请求播放", "play" => "开始播放", "stop-request" => "请求停止", "stop" when e.entity == "voice" => "声部结束",
         "stop" => "停止播放", "log" when EventSemantics.IsPlaybackEnd(e) => "播放结束",
         "aisac" => "AISAC", "selector" => "Selector", "block" => "Block", "beat" => "BeatSync",
         "sequence" => "Sequence", "category" => "Category", "error" => "错误", "warning" => "警告", "gap" => "采集缺口", "state" => "连接状态", "log" => "原始协议", _ => "其他"
     };
     public static bool Includes(WireEvent e, string category) => category switch
     {
-        "请求播放" => e.kind=="request",
+        "请求播放" => e.kind=="request"&&!PlaybackPresentation.IsUnknownStart(e),
+        "接入时已在播放" => e.kind=="request"&&PlaybackPresentation.IsUnknownStart(e),
         "开始播放" => e.kind=="play",
         "请求停止" => e.kind=="stop-request",
         "播放结束" => EventSemantics.IsPlaybackEnd(e),

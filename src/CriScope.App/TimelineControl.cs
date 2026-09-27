@@ -67,7 +67,7 @@ public sealed class TimelineControl : Control
             foreach(var group in ControlRows())
             {
                 if(group.Rows.Any(r=>r.Records.Any(e=>e.session==item.session && e.seq==item.seq))) { _expanded.Add(group.Key); break; }
-                _vertical += 40 + (_expanded.Contains(group.Key) ? group.Rows.Sum(r=>r.TargetLabel.Length>0?62:46) : 0);
+                _vertical += 40 + (_expanded.Contains(group.Key) ? group.Rows.Sum(r=>ControlRowHeight(r)) : 0);
             }
         }
         else if(Mode == "Location")
@@ -367,7 +367,7 @@ public sealed class TimelineControl : Control
         {
             bool expanded=_expanded.Contains(group.Key);
             bool compact=PlotWidth<400;
-            double height=40+(expanded?group.Rows.Sum(r=>r.TargetLabel.Length>0?62:46):0);
+            double height=40+(expanded?group.Rows.Sum(r=>ControlRowHeight(r)):0);
             if(!VisibleRow(y,height,contentTop-5)){y+=height;continue;}
             c.FillRectangle(Palette.Alternate,new Rect(0,y,Bounds.Width,40));
             using(c.PushClip(new Rect(12,y+1,Math.Max(0,Bounds.Width-36),38)))
@@ -381,7 +381,7 @@ public sealed class TimelineControl : Control
             if(!expanded)continue;
             foreach(var row in group.Rows)
             {
-                double rowHeight=row.TargetLabel.Length>0?62:46;
+                double rowHeight=ControlRowHeight(row);
                 if(!VisibleRow(y,rowHeight,contentTop-5)){y+=rowHeight;continue;}
                 var last=row.Latest;var samples=row.Records.Where(e=>e.time>=Start).ToArray();
                 var brush=Palette.Control(last.kind);
@@ -394,37 +394,45 @@ public sealed class TimelineControl : Control
                 }
                 if(row.TargetLabel.Length>0)
                 {
-                    double chip=LabelWidth+10;
-                    var owners=PlaybackGroups().Where(p=>p.PlayerId==last.objectId&&AssociationPresentation.ActiveAt(p,End)).ToArray();
-                    using var chipClip=c.PushClip(new Rect(LabelWidth,y+22,PlotWidth,32));
-                    foreach(var owner in owners)
-                    {
-                        var caption=owner.Name+" · "+ControlLabels.Get("播放实例",JsonSerializer.Serialize(new[]{owner.Request?.session??"",owner.Id}));
-                        double width=Math.Min(240,caption.Length*6.5+40);
-                        if(chip+width>Bounds.Width-24){Text(c,"…",chip,y+24,Palette.Voice);break;}
-                        c.DrawRectangle(null,new Pen(Palette.Border),new Rect(chip+width-32,y+22,32,32),3,3);
-                        using(c.PushTransform(Matrix.CreateTranslation(chip+width-24,y+30))) c.DrawGeometry(null,new Pen(Palette.Text,1.2),Geometry.Parse("M5,3 H1 V13 H11 V9 M6,1 H13 V8 M13,1 L5,9"));
-                        using(c.PushClip(new Rect(chip+5,y+23,width-42,28))) Text(c,caption,chip+5,y+24,Palette.Voice,10);
-                        if(AssociationPresentation.Anchor(owner) is {} ownerEvent) _links.Add((new Rect(chip+width-32,y+22,32,32),ownerEvent));
-                        chip+=width+6;
+                    var owners=RelatedOwners(row);double left=LabelWidth+10,width=Math.Max(60,Math.Min(370,PlotWidth-30));
+                    if(owners.Length==1)DrawRelatedCue(c,owners[0],left,y+22,width);
+                    else if(owners.Length>1) {
+                        var key="related:"+row.Key;
+                        Text(c,(_expanded.Contains(key)?"▾ ":"▸ ")+$"关联声音 · {owners.Length} 个",left,y+26,Palette.Voice,11);
+                        _expandHits.Add((new Rect(left,y+22,width,28),key));
+                        if(_expanded.Contains(key))for(int ownerIndex=0;ownerIndex<owners.Length;ownerIndex++)
+                            DrawRelatedCue(c,owners[ownerIndex],left+10,y+54+ownerIndex*32,width-10);
                     }
                 }
                 using(c.PushClip(new Rect(LabelWidth+8,y+1,Math.Max(0,compact?PlotWidth-16:PlotWidth-220),22)))
                     Text(c,(last.kind is "aisac" or "selector"?"最近设置：":"最近记录：")+ControlPresentation.Value(last),LabelWidth+10,y+5,Palette.Text,12);
-                Text(c,(last.estimatedTime?"约 +":"+")+Stamp(last.time),compact?LabelWidth+10:Math.Max(LabelWidth+180,Bounds.Width-202),y+6,size:10);
+                if(!compact)Text(c,Stamp(last.time),Math.Max(LabelWidth+180,Bounds.Width-202),y+6,size:10);
                 _hits.Add((new Rect(24,y,Math.Max(0,Bounds.Width-44),rowHeight),last));
                 // Discrete settings and callbacks; no interpolated curve or mixed parent value.
                 foreach(var e in samples)
                 {
-                    var x=X(e.time);var pointBrush=e.kind=="sequence"?Palette.SequenceTag(e.name):brush;c.DrawEllipse(e.estimatedTime?null:pointBrush,e.estimatedTime?new Pen(pointBrush,1.3):null,new Point(x,y+rowHeight-7),3,3);
-                    if(IsSelected(e))c.DrawEllipse(null,new Pen(Palette.Selection,2),new Point(x,y+rowHeight-7),6,6);
-                    _hits.Add((new Rect(x-5,y+rowHeight-20,10,20),e));
+                    var x=X(e.time);var pointBrush=e.kind=="sequence"?Palette.SequenceTag(e.name):brush;c.DrawEllipse(e.estimatedTime?null:pointBrush,e.estimatedTime?new Pen(pointBrush,1.3):null,new Point(x,y+48),3,3);
+                    if(IsSelected(e))c.DrawEllipse(null,new Pen(Palette.Selection,2),new Point(x,y+48),6,6);
+                    _hits.Add((new Rect(x-5,y+38,10,20),e));
                 }
-                if(samples.Length==0)Text(c,"此时间窗无新记录",LabelWidth+10,y+rowHeight-19,size:10);
+                if(samples.Length==0 && row.TargetLabel.Length==0)Text(c,"此时间窗无新记录",LabelWidth+10,y+30,size:10);
                 y+=rowHeight;
             }
         }
         _contentHeight=y+_vertical-contentTop;
+    }
+    private PlaybackGroup[] RelatedOwners(ControlRow row)=>row.TargetLabel.Length==0?[]:
+        PlaybackGroups().Where(p=>p.PlayerId==row.Latest.objectId&&AssociationPresentation.ActiveAt(p,End)).OrderBy(p=>p.Request?.time).ToArray();
+    private double ControlRowHeight(ControlRow row)=>54+(_expanded.Contains("related:"+row.Key)?RelatedOwners(row).Length*32:0);
+    private void DrawRelatedCue(DrawingContext c,PlaybackGroup owner,double x,double y,double width)
+    {
+        var identity=ControlLabels.Get("播放实例",JsonSerializer.Serialize(new[]{owner.Request?.session??"",owner.Id})).Replace("播放实例 ","");
+        double idWidth=Math.Max(32,identity.Length*7),buttonX=x+width-28;
+        using(c.PushClip(new Rect(x,y,Math.Max(0,width-idWidth-36),22)))Text(c,owner.Name,x,y+4,Palette.Text,11);
+        Text(c,identity,buttonX-idWidth-4,y+4,Palette.Muted,11);
+        using(c.PushTransform(Matrix.CreateScale(.65,.65)*Matrix.CreateTranslation(buttonX+6,y+5)))
+            c.DrawGeometry(null,new Pen(Palette.Muted,1.6),Geometry.Parse(VisualLanguage.Path(IconKind.Locate)));
+        if(AssociationPresentation.Anchor(owner) is {} target)_links.Add((new Rect(buttonX,y,28,28),target));
     }
     private void DrawToggle(DrawingContext c,Rect rect,string label,bool enabled,string key,IBrush brush)
     {
@@ -434,7 +442,13 @@ public sealed class TimelineControl : Control
             using(c.PushTransform(Matrix.CreateScale(.55,.55)*Matrix.CreateTranslation(rect.X+8,rect.Y+5)))
                 c.DrawGeometry(null,new Pen(enabled?brush:Palette.Muted,2),key=="source"?SpeakerIcon:EarIcon);
             Text(c,label,rect.X+29,rect.Y+5,enabled?brush:Palette.Muted,11);
-        } else Text(c,(enabled?"✓ ":"  ")+label,rect.X+9,rect.Y+5,enabled?brush:Palette.Muted,11);
+        } else {
+            var kind=key.StartsWith("control:")?key.Substring(8):"";
+            using(c.PushTransform(Matrix.CreateScale(.5,.5)*Matrix.CreateTranslation(rect.X+8,rect.Y+6)))
+                c.DrawGeometry(null,new Pen(enabled?brush:Palette.Muted,1.8),Geometry.Parse(VisualLanguage.Path(VisualLanguage.EventIcon(kind))));
+            Text(c,label,rect.X+25,rect.Y+5,enabled?brush:Palette.Muted,11);
+            if(enabled)Text(c,"✓",rect.Right-17,rect.Y+5,brush,10);
+        }
         _toggleHits.Add((rect,key));
     }
     private void DrawSeries(DrawingContext c,WireEvent[] all,double y,double height,IBrush brush,bool stepped)
@@ -551,8 +565,8 @@ public sealed class TimelineControl : Control
         c.FillRectangle(Palette.Border,MixingScrollTrack);
         c.FillRectangle(Palette.Muted,MixingScrollThumb);
     }
-    private static readonly Geometry EarIcon=Geometry.Parse("M17,18 C17,22 14,25 10,23 C7,21 11,18 8,15 C4,11 6,3 12,2 C21,0 25,10 19,15 M11,14 C8,10 11,6 15,7 C19,8 17,12 14,13 L13,18");
-    private static readonly Geometry SpeakerIcon=Geometry.Parse("M3,9 H8 L14,4 V22 L8,17 H3 Z M18,8 Q24,13 18,18 M21,4 Q31,13 21,22");
+    private static readonly Geometry EarIcon=Geometry.Parse(VisualLanguage.Path(IconKind.Listener));
+    private static readonly Geometry SpeakerIcon=Geometry.Parse(VisualLanguage.Path(IconKind.Source));
     private void DrawLocations(DrawingContext c)
     {
         Text(c,"空间 / XZ 俯视",22,20,Palette.Text,16);

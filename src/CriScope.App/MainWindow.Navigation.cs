@@ -49,13 +49,23 @@ public sealed partial class MainWindow
         RememberPosition(); _categoryId = category.objectId; _categoryName = category.name;
         _mode = "Timeline"; SaveView(); Build(); RestoreView(); UpdateEvents(); Refresh();
     }
+    private NavigationButton NavigationAction(string caption,Action action,string relatedName="")
+    {
+        var button=new NavigationButton {Caption=caption,RelatedName=relatedName,Content=NavigationContent(caption),Height=32,
+            Padding=new Thickness(8,0),Background=Brushes.Transparent,Foreground=_p.Text,BorderThickness=new Thickness(0),
+            HorizontalAlignment=HorizontalAlignment.Left,VerticalContentAlignment=VerticalAlignment.Center};
+        ToolTip.SetTip(button,caption+(relatedName.Length>0?" · "+relatedName:""));
+        button.PointerEntered+=(_,_)=>button.Background=_p.Hover;
+        button.PointerExited+=(_,_)=>button.Background=Brushes.Transparent;
+        button.Click+=(_,_)=>action();return button;
+    }
     private void AddAssociations(StackPanel details, WireEvent selected, PlaybackGroup? playback)
     {
         double time = ContextTime;
         var links = new StackPanel { Tag = "association-links", Spacing = 4 };
         void Link(string text, string mode, WireEvent target, bool eventTime = false)
         {
-            var b = Action(text, () => Navigate(mode, target, eventTime));
+            var b = NavigationAction(mode=="Location"?"定位空间音源":"定位播放实例", () => Navigate(mode, target, eventTime),text);
             b.Tag = $"navigate:{mode}:{target.session}:{target.seq}:{eventTime}";
             b.HorizontalAlignment = HorizontalAlignment.Stretch; b.HorizontalContentAlignment = HorizontalAlignment.Left;
             links.Children.Add(b);
@@ -67,8 +77,8 @@ public sealed partial class MainWindow
             : selected.kind is "aisac" or "selector" ? AssociationPresentation.PlayerPlaybacks(_snapshot, selected.objectId, time) : [];
         foreach(var owner in owners)
         {
-            if(!(playback==null && selected.kind is "aisac" or "selector") && (_mode!="Timeline" || playback == null) && AssociationPresentation.Anchor(owner) is {} anchor)
-                Link("定位声音 · " + PlaybackLabel(owner), "Timeline", anchor, _mode == "Logs");
+            if(!(_mode=="Logs" && selected.entity=="cue") && !(playback==null && selected.kind is "aisac" or "selector") && (_mode!="Timeline" || playback == null) && AssociationPresentation.Anchor(owner) is {} anchor)
+                Link(PlaybackLabel(owner), "Timeline", anchor, _mode == "Logs");
         }
         if(playback != null)
         {
@@ -81,7 +91,7 @@ public sealed partial class MainWindow
         {
             var sources = AssociationPresentation.SourcesFor(_snapshot, owners.Select(p=>p.Id), time);
             foreach(var source in sources)
-                Link(sources.Length == 1 ? "定位音源" : $"音源 · X {source.x:0.#} / Z {source.z:0.#}", "Location", source);
+                Link(sources.Length == 1 ? "" : $"音源 · X {source.x:0.#} / Z {source.z:0.#}", "Location", source);
             if(owners.Length>0 && sources.Length==0)
             {
                 var unavailable=Label("空间关联未提供",11,_p.Muted);
