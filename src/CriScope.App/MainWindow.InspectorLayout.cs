@@ -14,8 +14,8 @@ public sealed partial class MainWindow
     private void OrganizeInspector(StackPanel content)
     {
         if (_selected == null) { EnableInspectorCopy(content); return; }
-        var more = new StackPanel { Spacing = 4 };
-        var links = new StackPanel { Tag = "inspector-links", Spacing = 2, Margin = new Thickness(0,0,0,6) };
+        var more = new StackPanel { Spacing = UiMetrics.Space1 };
+        var links = new StackPanel { Tag = "inspector-links", Spacing = UiMetrics.Space1, Margin = new Thickness(0,0,0,UiMetrics.Space2) };
         var original = content.Children.ToArray();
         content.Children.Clear();
         void Flatten(Control item, StackPanel target)
@@ -28,10 +28,7 @@ public sealed partial class MainWindow
             else if (item is Expander fold && fold.Content is Control body)
             {
                 fold.Content = null;
-                var heading = Label(fold.Header?.ToString() ?? "",12,_p.Muted);
-                heading.FontWeight=FontWeight.SemiBold;
-                heading.Margin = new Thickness(0,12,0,4);
-                target.Children.Add(heading);
+                target.Children.Add(InspectorSection(fold.Header?.ToString() ?? "","section:"+fold.Tag));
                 if(body is StackPanel panel) {
                     var children=panel.Children.ToArray();panel.Children.Clear();
                     foreach(var child in children) Flatten(child,target);
@@ -45,16 +42,23 @@ public sealed partial class MainWindow
             else if(item is TextBlock section && section.Text=="关联与定位") { }
             else if(item is Button navigation && navigation.Tag?.ToString()?.StartsWith("cause:")==true)
                 links.Children.Add(navigation);
-            else if(item is Button record && record.Content is TextBlock recordText)
+            else if(item is Button record && record.Tag?.ToString()?.StartsWith("event:",StringComparison.Ordinal)==true && record.Content is TextBlock recordText)
             {
-                var row=new Grid {ColumnDefinitions=new ColumnDefinitions("*,32"),ColumnSpacing=8,MinHeight=34,Background=Brushes.Transparent};
-                var label=InspectorValue((recordText.Text??"").Replace("\n"," · "),11);
+                var row=new Grid {ColumnDefinitions=new ColumnDefinitions("*,32"),ColumnSpacing=UiMetrics.Space2,MinHeight=44,Background=Brushes.Transparent};
+                var originalText=recordText.Text??"";
+                var breakAt=originalText.LastIndexOf('\n');
+                var summary=breakAt>=0?originalText[..breakAt]:originalText;
+                var timestamp=breakAt>=0?originalText[(breakAt+1)..]:"";
+                var text=new StackPanel {Spacing=2,Margin=new Thickness(0,4,0,4)};
+                var label=InspectorValue(summary,UiMetrics.BodySize);
                 label.TextTrimming=TextTrimming.CharacterEllipsis;label.MaxLines=2;
-                ToolTip.SetTip(label,recordText.Text);
+                ToolTip.SetTip(label,originalText);
+                text.Children.Add(label);
+                if(timestamp.Length>0)text.Children.Add(InspectorValue(timestamp,11,_p.Muted));
                 record.Content=NavigationContent("");record.Width=32;record.Height=32;record.Padding=new Thickness(8,0);
                 ToolTip.SetTip(record,"定位此记录");Grid.SetColumn(record,1);
                 StyleInspectorLink(row,record);
-                row.Children.Add(label);row.Children.Add(record);target.Children.Add(row);
+                row.Children.Add(text);row.Children.Add(record);target.Children.Add(row);
             }
             else target.Children.Add(item);
         }
@@ -93,9 +97,9 @@ public sealed partial class MainWindow
             button.VerticalContentAlignment=VerticalAlignment.Center;
             if(button is NavigationButton {RelatedName.Length:>0} related) {
                 var index=links.Children.IndexOf(button);links.Children.Remove(button);
-                var row=new Grid {Tag=button.Tag,ColumnDefinitions=new ColumnDefinitions("*,Auto,32"),ColumnSpacing=8,MinHeight=36,Background=Brushes.Transparent};
+                var row=new Grid {Tag=button.Tag,ColumnDefinitions=new ColumnDefinitions("*,Auto,32"),ColumnSpacing=UiMetrics.Space2,MinHeight=36,Background=Brushes.Transparent};
                 var split=related.RelatedName.LastIndexOf(" · 播放实例 #",StringComparison.Ordinal);
-                var name=InspectorValue(split>=0?related.RelatedName[..split]:related.RelatedName,12);
+                var name=InspectorValue(split>=0?related.RelatedName[..split]:related.RelatedName,UiMetrics.BodySize);
                 if(split>=0){var number=InspectorValue(related.RelatedName[(split+3)..].Replace("播放实例 ",""),11,_p.Muted);Grid.SetColumn(number,1);row.Children.Add(number);}
                 name.TextTrimming=TextTrimming.CharacterEllipsis;name.MaxLines=2;ToolTip.SetTip(name,related.RelatedName);
                 button.Content=NavigationContent("");button.Width=32;button.Padding=new Thickness(8,0);Grid.SetColumn(button,2);
@@ -120,12 +124,14 @@ public sealed partial class MainWindow
     private void StyleInspectorLink(Grid row,Button button)
     {
         button.Height=30;button.CornerRadius=new CornerRadius(4);
-        button.Background=Brushes.Transparent;button.BorderBrush=_p.Border;button.BorderThickness=new Thickness(1);
+        button.Background=Brushes.Transparent;button.BorderBrush=Brushes.Transparent;button.BorderThickness=new Thickness(1);
         button.Cursor=new Cursor(StandardCursorType.Hand);
         row.PointerEntered+=(_,_)=>row.Background=_p.Hover;
         row.PointerExited+=(_,_)=>row.Background=Brushes.Transparent;
         button.PointerEntered+=(_,_)=>{button.Background=_p.Hover;button.BorderBrush=_p.Selection;};
-        button.PointerExited+=(_,_)=>{button.Background=Brushes.Transparent;button.BorderBrush=_p.Border;};
+        button.PointerExited+=(_,_)=>{button.Background=Brushes.Transparent;button.BorderBrush=Brushes.Transparent;};
+        button.GotFocus+=(_,_)=>button.BorderBrush=_p.Selection;
+        button.LostFocus+=(_,_)=>button.BorderBrush=Brushes.Transparent;
         ToolTip.SetTip(row,"点击右侧图标定位；名称和编号可选择、复制");
     }
 
@@ -135,8 +141,8 @@ public sealed partial class MainWindow
         {
             var tag=row.Tag?.ToString();
             if(tag is null || !tag.StartsWith("row:",StringComparison.Ordinal) && tag!="categories")continue;
-            row.ColumnDefinitions=new ColumnDefinitions(row.ColumnDefinitions.Count==3?"88,*,28":"88,*");
-            row.ColumnSpacing=10;
+            row.ColumnDefinitions=new ColumnDefinitions(row.ColumnDefinitions.Count==3?UiMetrics.InspectorActionColumns:UiMetrics.InspectorColumns);
+            row.ColumnSpacing=UiMetrics.InspectorFieldGap;
             if(tag=="categories")row.Margin=new Thickness(0);
             foreach(var button in row.Children.OfType<Button>())
             {
@@ -149,9 +155,9 @@ public sealed partial class MainWindow
 
     private Border InspectorSection(string title,string tag)
     {
-        var caption=Label(title,11,_p.Muted);caption.FontWeight=FontWeight.SemiBold;
+        var caption=Label(title,UiMetrics.CaptionSize,_p.Muted);caption.FontWeight=FontWeight.SemiBold;
         return new Border {Tag=tag,BorderBrush=_p.Border,BorderThickness=new Thickness(0,1,0,0),
-            Margin=new Thickness(0,10,0,2),Padding=new Thickness(0,9,0,0),Child=caption};
+            Margin=new Thickness(0,UiMetrics.Space3,0,UiMetrics.Space1),Padding=new Thickness(0,UiMetrics.Space2,0,0),Child=caption};
     }
 
     private void ArrangePlaybackFacts(StackPanel content)
@@ -198,7 +204,7 @@ public sealed partial class MainWindow
         }
     }
 
-    private SelectableTextBlock InspectorValue(string value,double size=12,IBrush? color=null) => new()
+    private SelectableTextBlock InspectorValue(string value,double size=UiMetrics.BodySize,IBrush? color=null) => new()
     {
         Text=value,FontSize=size,Foreground=color??_p.Text,VerticalAlignment=VerticalAlignment.Center,
         TextWrapping=TextWrapping.Wrap

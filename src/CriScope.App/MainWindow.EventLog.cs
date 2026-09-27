@@ -15,7 +15,7 @@ public sealed partial class MainWindow
 {
     private string _relatedPlayback = "", _relatedSession = "";
     private string _logQuery = "", _logKind = "全部", _logSignature = "";
-    private bool _logFollowing = true, _updatingLog, _logVoices;
+    private bool _logFollowing = true, _updatingLog, _logVoices, _logCompact;
     private WireEvent[] _logFrozen = [];
     private int _logLimit = 1000;
     private TextBlock? _logStatus;
@@ -24,9 +24,9 @@ public sealed partial class MainWindow
     private Control BuildEventLog()
     {
         if(_relatedSession!=_session?.Id)_relatedPlayback="";
-        var panel = new Grid { RowDefinitions = new RowDefinitions("Auto,26,*,26") };
-        var bar = new WrapPanel {Orientation=Orientation.Horizontal,Margin=new Thickness(12,5)};
-        var search = _logSearch = new TextBox { Width=280, Text=_logQuery, PlaceholderText="搜索日志：开始播放 CueName、实例结束、AISAC…",FontSize=12 };
+        var panel = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"), ClipToBounds=true };
+        var bar = new WrapPanel {Orientation=Orientation.Horizontal,Margin=new Thickness(12,7,12,5)};
+        var search = _logSearch = new TextBox { Width=280, Text=_logQuery, PlaceholderText="搜索事件、Cue 或对象…",FontSize=12 };
         search.TextChanged+=(_,_)=>{_logQuery=search.Text??""; UpdateEventLog();}; bar.Children.Add(search);
         var kind = new ComboBox {Width=150,ItemsSource=new[]{"全部","播放相关（全部）","请求播放","接入时已在播放","开始播放","请求停止","播放结束","控制","回调","异常与连接","原始协议（高级）"},SelectedItem=_logKind,FontSize=11,HorizontalAlignment=HorizontalAlignment.Stretch};
         kind.ItemTemplate=new FuncDataTemplate<string>((caption,_)=>{
@@ -44,7 +44,7 @@ public sealed partial class MainWindow
         clearRelated.IsVisible=_relatedPlayback.Length>0;Grid.SetColumn(clearRelated,5);bar.Children.Add(clearRelated);
         foreach(var control in bar.Children){control.Margin=new Thickness(0,0,8,4);control.MinHeight=32;}
         panel.Children.Add(bar);
-        var headings=new Grid{ColumnDefinitions=new ColumnDefinitions("108,132,240,*,32"),ColumnSpacing=8,Margin=new Thickness(12,0),Background=_p.Alternate};
+        var headings=new Grid{ColumnDefinitions=new ColumnDefinitions("132,136,2*,3*,32"),ColumnSpacing=8,Margin=new Thickness(12,0),Background=_p.Alternate,Height=26,IsVisible=!_logCompact};
         foreach(var (title,column) in new[]{("发生时间",0),("动作",1),("Cue / 对象",2),("内容",3)})
         {var label=Label(title,10,_p.Muted);Grid.SetColumn(label,column);headings.Children.Add(label);}
         Grid.SetRow(headings,1);panel.Children.Add(headings);
@@ -58,7 +58,16 @@ public sealed partial class MainWindow
         _events.DoubleTapped+=(_,_)=>{if(_events.SelectedItem is ListBoxItem{Tag:WireEvent item})LocateLogEvent(item);};
         _events.AddHandler(PointerWheelChangedEvent,(_,e)=>{if(_logFollowing && e.Delta.Y<0)ToggleLogFollow();},Avalonia.Interactivity.RoutingStrategies.Tunnel);
         Grid.SetRow(_events,2);panel.Children.Add(_events);
-        _logStatus=Label("",10,_p.Muted);_logStatus.Margin=new Thickness(14,4);_logStatus.TextTrimming=TextTrimming.CharacterEllipsis;Grid.SetRow(_logStatus,3);panel.Children.Add(_logStatus);
+        _logStatus=Label("",10,_p.Muted);_logStatus.Margin=new Thickness(14,5);_logStatus.TextTrimming=TextTrimming.CharacterEllipsis;Grid.SetRow(_logStatus,3);panel.Children.Add(_logStatus);
+        var logList=_events;
+        panel.SizeChanged+=(_,_)=>
+        {
+            if(!ReferenceEquals(_events,logList)||panel.Bounds.Width<=0)return;
+            search.Width=Math.Min(280,Math.Max(0,panel.Bounds.Width-32));
+            var compact=panel.Bounds.Width<820;
+            if(compact==_logCompact)return;
+            _logCompact=compact;headings.IsVisible=!compact;_logSignature="";UpdateEventLog();
+        };
         _logSignature=""; return panel;
     }
     private void ShowRelatedLog(string playbackId)
@@ -100,12 +109,13 @@ public sealed partial class MainWindow
         var results=matching.TakeLast(_logLimit).Reverse().ToArray();
         if(_logStatus!=null) {
             var frozenKeys=_logFollowing?null:_logFrozen.Select(e=>(e.session,e.seq)).ToHashSet();
-            var newCount=_logFollowing?0:_snapshot.Count(e=>!e.baseline && !frozenKeys!.Contains((e.session,e.seq)));
-            _logStatus.Text=$"{(_logFollowing?"实时更新":"暂停刷新 · 仍在采集 · 新增 "+newCount+" 条")}  |  当前缓存：显示 {results.Length:N0} / 匹配 {matching.Length:N0}"+(matching.Length>results.Length?" · 显示已截断":"");
+            var newCount=_logFollowing?0:_snapshot.Count(e=>!e.baseline && EventLogPresentation.Includes(e,_logKind)
+                && !frozenKeys!.Contains((e.session,e.seq)));
+            _logStatus.Text=$"{(_logFollowing?"实时":"已暂停 · 新增 "+newCount+" 条")} · 显示 {results.Length:N0} / {matching.Length:N0} 条匹配"+(matching.Length>results.Length?" · 已截断":"");
             ToolTip.SetTip(_logStatus,"搜索当前缓存全部记录；继续实时仅能补上仍在缓存中的记录。历史录制可通过打开日志检索。");
         }
         double timeOrigin=_session?.TimeOrigin??_timeline.TimeOrigin;
-        var signature=(_p.Light?"L":"D")+timeOrigin+_logQuery+_logKind+_logVoices+string.Join(',',results.Select(e=>e.session+":"+e.seq));
+        var signature=(_p.Light?"L":"D")+timeOrigin+_logQuery+_logKind+_logVoices+_logCompact+string.Join(',',results.Select(e=>e.session+":"+e.seq));
         if(signature==_logSignature)return;_logSignature=signature;
         _updatingLog=true;
         try
@@ -113,13 +123,14 @@ public sealed partial class MainWindow
             var items=new List<ListBoxItem>();
             foreach(var e in results)
             {
-                var line=new Grid{ColumnDefinitions=new ColumnDefinitions("108,132,240,*,32"),ColumnSpacing=8,Margin=new Thickness(0,2)};
-                line.Children.Add(Label(WallTime(e.time,_session),11,_p.Muted));
+                var line=new Grid{ColumnDefinitions=new ColumnDefinitions(_logCompact?"132,*,32":"132,136,2*,3*,32"),ColumnSpacing=8,
+                    RowDefinitions=new RowDefinitions(_logCompact?"Auto,Auto":"Auto"),RowSpacing=_logCompact?2:0,Margin=new Thickness(0,2)};
+                var stamp=Label(WallTime(e.time,_session),11,_p.Muted);stamp.TextTrimming=TextTrimming.CharacterEllipsis;ToolTip.SetTip(stamp,stamp.Text);line.Children.Add(stamp);
                 var badge=VisualLanguage.EventBadge(e,_logVoices&&e.entity=="voice"?(e.kind=="play"?"Voice 分配":"Voice 释放"):EventLogPresentation.Action(e),_p);
                 Grid.SetColumn(badge,1);line.Children.Add(badge);
                 var logOwner=owners.GetValueOrDefault(e.entity=="cue"?e.objectId:e.parentId);
                 var targetName=e.kind is "aisac" or "selector"?ControlPresentation.TargetLabel(e.session,e.objectId,_timeline.ControlLabels):logOwner!=null?PlaybackLabel(logOwner):e.name;
-                var name=Label(targetName,13);name.TextTrimming=TextTrimming.CharacterEllipsis;Grid.SetColumn(name,2);line.Children.Add(name);
+                var name=Label(targetName,_logCompact?12:13);name.FontWeight=FontWeight.Medium;ToolTip.SetTip(name,targetName);
                 string detail=EventLogPresentation.Detail(e);
                 if(_logVoices&&e.entity=="voice")detail="Voice · "+detail;
                 var owner=owners.GetValueOrDefault(e.entity=="cue"?e.objectId:e.parentId);
@@ -128,8 +139,25 @@ public sealed partial class MainWindow
                     if(owner.DurationAt(e.time) is {} duration)detail+=$" · {duration:0.000} 秒";
                 }
                 if(ControlPresentation.Kinds.Contains(e.kind)&&e.kind!="sequence")detail=e.name+" = "+detail;
-                var value=Label(detail,11,e.kind=="sequence"?_p.SequenceTag(e.name):_p.Muted);value.TextTrimming=TextTrimming.CharacterEllipsis;Grid.SetColumn(value,3);line.Children.Add(value);
-                var locate=IconAction("定位此事件",IconKind.Locate,()=>LocateLogEvent(e));locate.Width=32;locate.Height=32;Grid.SetColumn(locate,4);line.Children.Add(locate);
+                var value=Label(detail,11,e.kind=="sequence"?_p.SequenceTag(e.name):_p.Muted);ToolTip.SetTip(value,detail);
+                var locate=IconAction("定位此事件",IconKind.Locate,()=>LocateLogEvent(e));locate.Width=32;locate.Height=32;
+                if(_logCompact)
+                {
+                    var content=new Grid{ColumnDefinitions=new ColumnDefinitions("180,*"),ColumnSpacing=10};
+                    name.TextWrapping=TextWrapping.Wrap;name.MaxLines=2;name.TextTrimming=TextTrimming.CharacterEllipsis;
+                    value.TextWrapping=TextWrapping.Wrap;value.MaxLines=2;value.TextTrimming=TextTrimming.CharacterEllipsis;
+                    name.VerticalAlignment=VerticalAlignment.Top;value.VerticalAlignment=VerticalAlignment.Top;
+                    content.Children.Add(name);Grid.SetColumn(value,1);content.Children.Add(value);
+                    Grid.SetRow(content,1);Grid.SetColumnSpan(content,3);line.Children.Add(content);
+                    Grid.SetColumn(locate,2);
+                }
+                else
+                {
+                    name.TextTrimming=TextTrimming.CharacterEllipsis;Grid.SetColumn(name,2);line.Children.Add(name);
+                    value.TextTrimming=TextTrimming.CharacterEllipsis;Grid.SetColumn(value,3);line.Children.Add(value);
+                    Grid.SetColumn(locate,4);
+                }
+                line.Children.Add(locate);
                 var item=new ListBoxItem {Tag=e,Content=line,Padding=new Thickness(12,0)};
                 item.Template=new FuncControlTemplate<ListBoxItem>((owner,scope)=>{
                     var presenter=new ContentPresenter();presenter.Bind(ContentPresenter.ContentProperty,new Binding("Content"){Source=owner});

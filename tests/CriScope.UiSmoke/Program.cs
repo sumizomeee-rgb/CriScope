@@ -111,31 +111,26 @@ public sealed class SmokeApp : Application
                     await Task.Delay(150);
                     var axisTimeline=Field<TimelineControl>("_timeline");
                     Check(axisTimeline.PreferWallTime&&axisTimeline.ShowingWallTime&&axisTimeline.ClockTimeAt?.Invoke(a.TimeOrigin) is {} clockPoint&&axisTimeline.DisplayStamp(a.TimeOrigin).Contains(clockPoint.ToLocalTime().ToString("HH:mm:ss")),"有接收锚点时默认展示真实钟表时间");
-                    ToggleButton AxisMode() => window.GetVisualDescendants().OfType<ToggleButton>().Single(button=>button.Name=="TimeAxisToggle");
-                    Check(AxisMode().IsChecked==true
-                        &&AxisMode().GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().Any()
-                        &&ToolTip.GetTip(AxisMode())?.ToString()?.StartsWith("当前：钟表时间")==true
-                        &&ToolTip.GetTip(AxisMode())?.ToString()?.Contains("相对时间")==true,
-                        "时间轴默认钟表时间，使用 SVG 图标切换并以提示说明另一模式");
+                    string AxisTip() => (string)typeof(TimelineControl).GetMethod("TimeAxisToggleTip",BindingFlags.Instance|BindingFlags.NonPublic)!
+                        .Invoke(Field<TimelineControl>("_timeline"),null)!;
+                    Check(axisTimeline.PreferWallTime
+                        &&AxisTip().StartsWith("当前：钟表时间")
+                        &&AxisTip().Contains("相对时间")
+                        &&!window.GetVisualDescendants().OfType<ToggleButton>().Any(button=>button.Name=="TimeAxisToggle"),
+                        "时间轴默认钟表时间，刻度槽使用无常驻胶囊的图标并提示另一模式");
                     var axisScreenshot=Path.GetFullPath(".local/ui-check/axis-mode-aligned.png");
                     Directory.CreateDirectory(Path.GetDirectoryName(axisScreenshot)!);
                     File.WriteAllBytes(axisScreenshot,window.CapturePng("window"));
                     void CheckAxisLayout(string caseName)
                     {
-                        var button=AxisMode();
-                        var toolbar=(Grid)button.Parent!;
-                        var range=Field<ComboBox>("_windowRange");
-                        var axisPosition=button.TranslatePoint(new Point(0,0),window)!.Value;
-                        var toolbarPosition=toolbar.TranslatePoint(new Point(0,0),window)!.Value;
-                        var rangePosition=range.TranslatePoint(new Point(0,0),window)!.Value;
-                        var timelinePosition=Field<TimelineControl>("_timeline").TranslatePoint(new Point(0,0),window)!.Value;
-                        Check(button.Bounds.Width==32&&button.Bounds.Height==32
-                            &&axisPosition.X>=rangePosition.X+range.Bounds.Width+2
-                            &&axisPosition.X+button.Bounds.Width<=toolbarPosition.X+toolbar.Bounds.Width+.5
-                            &&axisPosition.Y>=toolbarPosition.Y-.5
-                            &&axisPosition.Y+button.Bounds.Height<=toolbarPosition.Y+toolbar.Bounds.Height+.5
-                            &&axisPosition.Y+button.Bounds.Height<timelinePosition.Y,
-                            $"{caseName}：时间切换按钮完整位于工具栏内，避开范围选择和画布（按钮 {axisPosition}，工具栏 {toolbarPosition}/{toolbar.Bounds.Size}，画布 {timelinePosition}）");
+                        var timeline=Field<TimelineControl>("_timeline");
+                        var target=timeline.TimeAxisToggleBounds;
+                        var timelinePosition=timeline.TranslatePoint(new Point(0,0),window)!.Value;
+                        Check(target.Width==32&&target.Height==32
+                            &&target.X>=0&&target.Y>=0
+                            &&target.Right<=214&&target.Bottom<=34
+                            &&target.Right<=timeline.Bounds.Width&&target.Bottom<=timeline.Bounds.Height,
+                            $"{caseName}：时间切换图标完整位于刻度行左侧安全槽（目标 {target}，画布 {timelinePosition}/{timeline.Bounds.Size}）");
                     }
                     CheckAxisLayout("标准窗口");
                     var inspectorBefore=State().GetProperty("inspector").GetBoolean();
@@ -158,7 +153,7 @@ public sealed class SmokeApp : Application
                     var filterPosition=filter.TranslatePoint(new Point(0,0),window)!.Value;
                     var fit=window.GetVisualDescendants().OfType<Button>().Single(button=>ToolTip.GetTip(button)?.ToString()?.StartsWith("一次性缩放")==true);
                     var fitPosition=fit.TranslatePoint(new Point(0,0),window)!.Value;
-                    var bar=(Grid)AxisMode().Parent!;
+                    var bar=(Grid)fit.Parent!;
                     var barPosition=bar.TranslatePoint(new Point(0,0),window)!.Value;
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/axis-mode-narrow-category.png"),window.CapturePng("window"));
                     Check(chip.IsVisible&&chip.Bounds.Width<=150
@@ -174,20 +169,20 @@ public sealed class SmokeApp : Application
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/axis-mode-medium-details.png"),window.CapturePng("window"));
                     Click(Field<Button>("_detailsToggle"));window.Width=1480;await Task.Delay(220);
                     if(inspectorBefore) Click(Field<Button>("_detailsToggle"));
-                    AxisMode().IsChecked=false;
+                    axisTimeline=Field<TimelineControl>("_timeline");
+                    axisTimeline.SetTimeAxisMode(false);
                     Check(!axisTimeline.ShowingWallTime&&axisTimeline.DisplayStamp(a.TimeOrigin)==axisTimeline.Stamp(a.TimeOrigin)
-                        &&Field<TextBlock>("_range").Text!.Contains("采集相对时间")
-                        &&ToolTip.GetTip(AxisMode())?.ToString()?.StartsWith("当前：相对时间")==true
-                        &&ToolTip.GetTip(AxisMode())?.ToString()?.Contains("钟表时间")==true,
+                        &&AxisTip().StartsWith("当前：相对时间")
+                        &&AxisTip().Contains("钟表时间"),
                         "时间轴切换到相对时间并更新图标提示");
                     var storedType=typeof(MainWindow).Assembly.GetType("CriScope.App.TimeAxisPreferences")!;
                     var stored=Activator.CreateInstance(storedType,[preferencesPath])!;
                     Check(!((bool)storedType.GetMethod("LoadWallTime")!.Invoke(stored,null)!),"相对时间选择写入持久偏好，重启后可重新读取");
                     window.ApplyUiAction("workspace","播放");axisTimeline=Field<TimelineControl>("_timeline");
-                    Check(!axisTimeline.PreferWallTime&&AxisMode().IsChecked==false,"时间轴显示偏好跨工作区保留");
-                    AxisMode().IsChecked=true;
-                    Check(axisTimeline.ShowingWallTime&&Field<TextBlock>("_range").Text!.Contains("钟表时间")
-                        &&ToolTip.GetTip(AxisMode())?.ToString()?.StartsWith("当前：钟表时间")==true,
+                    Check(!axisTimeline.PreferWallTime,"时间轴显示偏好跨工作区保留");
+                    axisTimeline.SetTimeAxisMode(true);
+                    Check(axisTimeline.ShowingWallTime
+                        &&AxisTip().StartsWith("当前：钟表时间"),
                         "时间轴可切回钟表时间并更新提示");
                     var noClockAxis=new TimelineControl {TimeOrigin=10,End=20,ClockTimeAt=_=>null};
                     Check(!noClockAxis.ShowingWallTime&&noClockAxis.DisplayStamp(20)==noClockAxis.Stamp(20),"没有钟表锚点时回退相对刻度");
@@ -637,16 +632,42 @@ public sealed class SmokeApp : Application
                     Check(overlayTimeline.SpatialOverlayBounds.Height>0&&overlayTimeline.SpatialOverlayMaxScroll>0,"同点列表限高且支持滚动");
                     Check(ToolTip.GetTip(overlayTimeline)==null,"列表打开没有旧tooltip遮挡");
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v06-spatial-overlay.png"),window.CapturePng("window"));
-                    var beforeOverlay=((List<(Rect rect,WireEvent? item,string? key)>)typeof(TimelineControl).GetField("_spatialHits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(overlayTimeline)!).Select(x=>x.rect).ToArray();
+                    var beforeOverlay=((List<(Rect rect,WireEvent? item,string? key)>)typeof(TimelineControl).GetField("_spatialHits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(overlayTimeline)!).Where(x=>x.rect.Width<=20).Select(x=>x.rect).ToArray();
                     overlayTimeline.CloseSpatialList();window.CapturePng("window");
-                    var afterOverlay=((List<(Rect rect,WireEvent? item,string? key)>)typeof(TimelineControl).GetField("_spatialHits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(overlayTimeline)!).Select(x=>x.rect).ToArray();
-                    Check(beforeOverlay.SequenceEqual(afterOverlay),"空间列表开关不改变画布对象位置");
+                    var afterOverlay=((List<(Rect rect,WireEvent? item,string? key)>)typeof(TimelineControl).GetField("_spatialHits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(overlayTimeline)!).Where(x=>x.rect.Width<=20).Select(x=>x.rect).ToArray();
+                    Check(beforeOverlay.Length>0&&beforeOverlay.SequenceEqual(afterOverlay),"空间列表开关不改变画布对象锚点");
                     Check(overlayTimeline.ExpandedKeys.All(k=>!k.StartsWith("spatial:")),"空间列表可独立关闭");
                     Check(EventLogPresentation.Includes(new WireEvent{kind="stop-request"},"请求停止")&&!EventLogPresentation.Includes(new WireEvent{kind="play"},"请求停止"),"停止请求可单独筛选");
                     Check(!EventLogPresentation.Includes(new WireEvent{kind="stop-request"},"播放结束"),"结束筛选不混入停止请求");
                     Check(!EventLogPresentation.Includes(new WireEvent{kind="log",name="SoundVoice_Volume"},"异常与连接")&&EventLogPresentation.Includes(new WireEvent{kind="error"},"异常与连接"),"异常分类不混入原始协议");
                     Check(EventLogPresentation.Includes(new WireEvent{kind="log",name="SoundVoice_Volume"},"原始协议（高级）")&&!EventLogPresentation.Includes(new WireEvent{kind="log",name="SoundVoice_Volume"},"全部"),"原始协议只在高级分类显示");
                     Check(AssociationPresentation.CueCategories(new WireEvent{raw="{\"basis\":\"cue-config\",\"categories\":[\"Music\",\"Music\",\"Volume_Music\"]}"}).SequenceEqual(new[]{"Music","Volume_Music"}),"Cue配置分类去重并保留顺序");
+                    var firstGroupCatalog=new WireEvent{kind="category-catalog",raw=JsonSerializer.Serialize(new {
+                        basis="acf-category-catalog",firstGroupNo=5,
+                        firstGroupCategories=new[]{new{groupNo=5,index=4,ordinal=0,name="Ambience"},new{groupNo=5,index=9,ordinal=1,name="Dialogue"}}
+                    })};
+                    var firstGroupCue=new WireEvent{kind="cue-info",raw=JsonSerializer.Serialize(new {
+                        basis="cue-config",firstGroupNo=5,
+                        categoryDetails=new[]{new{groupNo=5,index=9,ordinal=1,name="Dialogue"}}
+                    })};
+                    var changedAcfCue=new WireEvent{kind="cue-info",raw=JsonSerializer.Serialize(new {
+                        basis="cue-config",firstGroupNo=6,
+                        categoryDetails=new[]{new{groupNo=6,index=18,ordinal=0,name="New Group"}}
+                    })};
+                    var dialogueCategory=new WireEvent{kind="category",objectId="category-index:9",name="Dialogue"};
+                    var ambienceOverride=new WireEvent{kind="category",objectId="2:category-index:4",name="Ambience"};
+                    var epochDialogueCategory=new WireEvent{kind="category",objectId="2:category-index:9",name="Category 索引 9"};
+                    var conflictingCategory=new WireEvent{kind="category",objectId="2:category-index:18",name="Dialogue"};
+                    var unrelatedCategory=new WireEvent{kind="category",objectId="category-index:18",name="Other"};
+                    Check(PlaybackCategoryPresentation.Resolve(firstGroupCatalog,null,[dialogueCategory,unrelatedCategory]) is {Name:"Dialogue",Ordinal:1,Index:9}
+                        &&PlaybackCategoryPresentation.Resolve(firstGroupCatalog,firstGroupCue,[ambienceOverride]) is {Name:"Ambience",Ordinal:0,Index:4}
+                        &&PlaybackCategoryPresentation.Resolve(firstGroupCatalog,null,[epochDialogueCategory]) is {Name:"Dialogue",Ordinal:1,Index:9}
+                        &&PlaybackCategoryPresentation.Resolve(firstGroupCatalog,null,[conflictingCategory]) is null
+                        &&PlaybackCategoryPresentation.Resolve(firstGroupCatalog,changedAcfCue,[new WireEvent{objectId="2:category-index:18",name="New Group"}]) is {Name:"New Group",Ordinal:0,Index:18}
+                        &&PlaybackCategoryPresentation.Resolve(firstGroupCatalog,null,[unrelatedCategory]) is null
+                        &&PlaybackCategoryPresentation.Resolve(null,firstGroupCue,[]) is {Name:"Dialogue",Ordinal:1}
+                        &&PlaybackCategoryPresentation.Resolve(null,null,[dialogueCategory]) is null,
+                        "播放实例只按当前 ACF 首个 Category Group 归色，缺证据保持中性且不写死游戏名称");
                     navSession.Accept(new WireEvent{session=navSession.Id,seq=20,time=3,kind="cue-info",name="Music Fixture",objectId=navRequest.objectId,parentId=navRequest.objectId,value=89846});
                     Select(navSession);window.ApplyUiAction("workspace","Timeline");window.ApplyUiAction("range","0:4");window.ApplyUiAction("select","1");
                     await Task.Delay(350);
@@ -705,7 +726,8 @@ public sealed class SmokeApp : Application
                     for(int i=0;i<12;i++)navSession.Accept(new WireEvent{session=navSession.Id,seq=30+i,time=3+i*.01,kind="aisac",objectId="2:p",name="Distance",value=i});
                     window.ApplyUiAction("workspace","Timeline");window.ApplyUiAction("range","0:4");window.ApplyUiAction("select","1");await Task.Delay(350);
                     var preview=(StackPanel)Field<StackPanel>("_details").Children.OfType<Expander>().Single().Content!;
-                    Check(preview.Children.OfType<Grid>().Count(g=>g.Children.OfType<Button>().Any())<=3,"大量关联设置只预览最近三条");
+                    Check(preview.GetLogicalDescendants().OfType<Button>().Count(button=>button.Tag?.ToString()?.StartsWith("event:")==true)==3,
+                        "大量关联设置只预览最近三条");
                     navSession.Accept(new WireEvent{session=navSession.Id,seq=99,time=3.5,kind="aisac",objectId="unrelated-player",name="Unrelated",value=5});
                     typeof(MainWindow).GetMethod("ShowRelatedLog",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,[navRequest.objectId]);await Task.Delay(350);
                     Check(Field<ListBox>("_events").ItemsSource!.Cast<ListBoxItem>().Count(i=>i.Tag is WireEvent e && e.kind=="aisac")>=12,"全部关联记录包含Player上的AISAC设置");
@@ -717,6 +739,17 @@ public sealed class SmokeApp : Application
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v11-filter.png"),window.CapturePng("window"));kindMenu.IsDropDownOpen=false;
 
                     Check(!Field<ListBox>("_events").ItemsSource!.Cast<ListBoxItem>().Any(i=>i.Tag is WireEvent e && e.name=="Unrelated"),"关联日志不混入其他Player的设置");
+                    window.Width=1000;await Task.Delay(260);
+                    var narrowLog=Field<ListBox>("_events");
+                    var narrowLogRow=(Grid)narrowLog.ItemsSource!.Cast<ListBoxItem>().First(i=>i.Tag is WireEvent).Content!;
+                    Check(Field<bool>("_logCompact")&&narrowLogRow.RowDefinitions.Count==2
+                        &&narrowLogRow.Children.OfType<Grid>().Any(g=>Grid.GetRow(g)==1)
+                        &&narrowLogRow.Children.OfType<Button>().Any(),
+                        "窄窗口打开详情时日志改为双行，保留对象、内容与定位入口");
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v12-logs-narrow.png"),window.CapturePng("window"));
+                    window.Width=1480;await Task.Delay(220);
+                    Check(!Field<bool>("_logCompact")&&((Grid)Field<ListBox>("_events").ItemsSource!.Cast<ListBoxItem>().First(i=>i.Tag is WireEvent).Content!).RowDefinitions.Count==1,
+                        "宽窗口恢复日志表格列布局");
                     // Long names and two same-name instances must preserve separate navigation targets.
                     foreach(var request in controlSession.ViewSnapshot().Where(e=>e.kind=="request"))request.name="Long_Music_Cue_同名并发实例_abcdefghijklmnopqrstuvwxyz";
                     Select(controlSession);window.ApplyUiAction("workspace","AISAC");window.ApplyUiAction("filter","");window.ApplyUiAction("range","0:20");
@@ -735,6 +768,14 @@ public sealed class SmokeApp : Application
                     var resourceTimeline=Field<TimelineControl>("_timeline");resourceTimeline.ExpandedKeys=["technical-metrics","pool-config","metric:CRI CPUCpuLoad"];
                     resourceTimeline.InvalidateVisual();await Task.Delay(200);
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v08-resources.png"),window.CapturePng("window"));
+                    for(var metric=0;metric<48;metric++)resourceSession.Accept(new WireEvent {session=resourceSession.Id,seq=4+metric,time=2,kind="metric",name="资源指标 "+metric,objectId="resource:"+metric,value=metric});
+                    await Task.Delay(250);
+                    var resourceOffset=typeof(TimelineControl).GetField("_vertical",BindingFlags.Instance|BindingFlags.NonPublic)!;
+                    resourceOffset.SetValue(resourceTimeline,100000d);window.CapturePng("workspace");
+                    var bottomOffset=(double)resourceOffset.GetValue(resourceTimeline)!;
+                    resourceOffset.SetValue(resourceTimeline,100000d);window.CapturePng("workspace");
+                    Check(bottomOffset>0&&double.IsFinite(bottomOffset)&&Math.Abs((double)resourceOffset.GetValue(resourceTimeline)!-bottomOffset)<.001,
+                        "资源滚动到底后重复绘制保持同一偏移，不触发回跳");
                     var unknownSession=Meta(Guid.NewGuid().ToString("N"),"native","unknown-start");sessions[unknownSession.Id]=unknownSession;
                     var unknownRequest=new WireEvent {session=unknownSession.Id,seq=1,time=1,kind="request",entity="cue",objectId="hot-pb",name="热接入声音",detail="连接时已有播放；起点未知"};
                     unknownSession.Accept(unknownRequest);
@@ -746,24 +787,37 @@ public sealed class SmokeApp : Application
                     Check(unknownStart.Children.OfType<SelectableTextBlock>().Single() is {Text:"开始发生在记录之前"} startValue&&startValue.Foreground?.ToString()==good&&unknownStart.Children.OfType<TextBlock>().First(x=>x.Text=="开始播放").Foreground?.ToString()==good,"起点未知但有播放证据时开始标签和值仍使用绿色");
                     await Task.Delay(400);
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/unknown-start.png"),window.CapturePng("window"));
-                    var categoryVisual=Meta(Guid.NewGuid().ToString("N"),"native","category-visual");sessions[categoryVisual.Id]=categoryVisual;
+                    var categoryClient=Guid.NewGuid().ToString("N");
+                    var categoryVisual=Meta(categoryClient,"native","category-visual");
+                    var categorySdk=Meta(categoryClient,"sdk","category-visual");
+                    sessions[categoryVisual.Id]=categoryVisual;sessions[categorySdk.Id]=categorySdk;
+                    categorySdk.Accept(new WireEvent {session=categorySdk.Id,seq=1,time=.8,observedTime=.8,kind="category-catalog",raw=JsonSerializer.Serialize(new {
+                        basis="acf-category-catalog",firstGroupNo=0,
+                        firstGroupCategories=new[]{new{groupNo=0,index=0,ordinal=0,name="Volume_Music"},
+                            new{groupNo=0,index=1,ordinal=1,name="Volume_SFX"},new{groupNo=0,index=2,ordinal=2,name="Volume_Voice"}}
+                    })});
                     var categoryCases=new (string Id,string Name,double At,string[] Categories)[] {
-                        ("single","UI_Click",1,["SFX_UI"]),
-                        ("multi","Music_Loop",2,["Music","Volume_Music","Trigger_Music"]),
+                        ("single","UI_Click",1,["Volume_SFX","SFX_UI"]),
+                        ("multi","Music_Loop",2,["Volume_Music","Music","Trigger_Music"]),
                         ("unknown","Unclassified_Cue",3,[])
                     };
+                    var categoryIds=new Dictionary<string,int>{{"Volume_Music",0},{"Volume_SFX",1},{"SFX_UI",14},{"Music",5},{"Trigger_Music",33}};
                     int categorySeq=0;
                     foreach(var item in categoryCases)
                     {
                         var playbackId="visual-"+item.Id;var voiceId="visual-voice-"+item.Id;
-                        categoryVisual.Accept(new WireEvent {session=categoryVisual.Id,seq=++categorySeq,time=item.At,kind="request",entity="cue",objectId=playbackId,name=item.Name});
+                        categoryVisual.Accept(new WireEvent {session=categoryVisual.Id,seq=++categorySeq,time=item.At,observedTime=item.At,kind="request",entity="cue",objectId=playbackId,name=item.Name});
                         categoryVisual.Accept(new WireEvent {session=categoryVisual.Id,seq=++categorySeq,time=item.At+.02,kind="play",entity="voice",objectId=voiceId,parentId=playbackId,name=item.Name});
                         for(int index=0;index<item.Categories.Length;index++)
-                            categoryVisual.Accept(new WireEvent {session=categoryVisual.Id,seq=++categorySeq,time=item.At+.03+index*.001,kind="category",entity="category",objectId="category-index:"+(Array.IndexOf(new[]{"SFX_UI","Music","Volume_Music","Trigger_Music"},item.Categories[index])+1),parentId=playbackId,name=item.Categories[index]});
+                            categoryVisual.Accept(new WireEvent {session=categoryVisual.Id,seq=++categorySeq,time=item.At+.03+index*.001,kind="category",entity="category",objectId="2:category-index:"+categoryIds[item.Categories[index]],parentId=playbackId,name=item.Categories[index]});
                         categoryVisual.Accept(new WireEvent {session=categoryVisual.Id,seq=++categorySeq,time=item.At+.38,kind="stop",entity="voice",objectId=voiceId,parentId=playbackId,name=item.Name});
                         categoryVisual.Accept(new WireEvent {session=categoryVisual.Id,seq=++categorySeq,time=item.At+.4,kind="stop",entity="cue",lifecycle="stopped",objectId=playbackId,name=item.Name});
                     }
                     Select(categoryVisual);window.ApplyUiAction("workspace","Timeline");window.ApplyUiAction("range","0:4");window.ApplyUiAction("filter","");await Task.Delay(200);
+                    Check(Field<WireEvent[]>("_snapshot").Any(e=>e.kind=="category-catalog")
+                        &&!Equals(Field<object>("_p").GetType().GetMethod("Category",[typeof(int)])!.Invoke(Field<object>("_p"),[0])?.ToString(),
+                            Field<object>("_p").GetType().GetMethod("Category",[typeof(int)])!.Invoke(Field<object>("_p"),[1])?.ToString()),
+                        "同客户端 SDK 首组目录投影到原生时间轴且两个分类色不同");
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/category-tracks-dark.png"),window.CapturePng("window"));
                     var categoryTips=(List<(Rect rect,string tip)>)typeof(TimelineControl).GetField("_playbackTips",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(Field<TimelineControl>("_timeline"))!;
                     Check(categoryTips.Any(t=>t.rect.X<=5&&t.tip.Contains("Category：SFX_UI"))

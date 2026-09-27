@@ -7,7 +7,7 @@ public static class ClientTimelineProjection
 {
     public static WireEvent[] Combine(WireEvent[] native, WireEvent[] sdk)
     {
-        var additions=sdk.Where(e=>e.kind is "beat" or "sequence" or "block" or "cue-info").ToArray();
+        var additions=sdk.Where(e=>e.kind is "beat" or "sequence" or "block" or "cue-info" or "category-catalog").ToArray();
         if(additions.Length==0)return native;
         var anchors=native.Where(e=>e.observedTime>0&&!e.baseline&&e.time>0&&e.kind!="gap"&&!e.detail.Contains("起点未知",StringComparison.Ordinal))
             .GroupBy(e=>(long)(e.observedTime*2)).Select(g=>g.First()).OrderBy(e=>e.observedTime).ToArray();
@@ -19,7 +19,7 @@ public static class ClientTimelineProjection
         foreach(var e in additions)
         {
             var clock=e.observedTime>0?e.observedTime:e.time;
-            if(clock<anchors[0].observedTime-1||clock>anchors[^1].observedTime+2)continue;
+            if(e.kind!="category-catalog"&&(clock<anchors[0].observedTime-1||clock>anchors[^1].observedTime+2))continue;
             int lo=0,hi=anchors.Length-1;
             while(lo<hi){int mid=(lo+hi)/2;if(anchors[mid].observedTime<clock)lo=mid+1;else hi=mid;}
             var anchor=anchors[lo];if(lo>0&&Math.Abs(anchors[lo-1].observedTime-clock)<Math.Abs(anchor.observedTime-clock))anchor=anchors[lo-1];

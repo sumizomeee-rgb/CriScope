@@ -18,7 +18,7 @@ public sealed partial class MainWindow
     {
         var button=Action(tip,action);
         button.Content=VisualLanguage.Glyph(icon,_p.Text,18);
-        button.Width=34;button.Height=34;button.Padding=new Thickness(0);
+        button.Width=UiMetrics.IconTarget;button.Height=UiMetrics.IconTarget;button.Padding=new Thickness(0);
         button.HorizontalContentAlignment=HorizontalAlignment.Center;button.VerticalContentAlignment=VerticalAlignment.Center;return button;
     }
     private string WallTime(double time,Session? session)
@@ -34,21 +34,21 @@ public sealed partial class MainWindow
         {
             fold.HorizontalAlignment=HorizontalAlignment.Stretch;fold.MinHeight=0;fold.Padding=new Thickness(0);fold.Margin=new Thickness(0);
             fold.Template=new FuncControlTemplate<Expander>((owner,scope)=>{
-                var panel=new StackPanel {Spacing=4};
+                var panel=new StackPanel {Spacing=UiMetrics.Space1};
                 var heading=new Grid {ColumnDefinitions=new ColumnDefinitions("*,18")};
                 var arrow=new Avalonia.Controls.Shapes.Path {Data=Geometry.Parse("M5,3 L12,10 L5,17"),Stroke=_p.Muted,StrokeThickness=1.5,Width=10,Height=12,Stretch=Stretch.Uniform,VerticalAlignment=VerticalAlignment.Center,RenderTransformOrigin=RelativePoint.Center};
                 var rotation=new RotateTransform(owner.IsExpanded?90:0);arrow.RenderTransform=rotation;
                 if(_animateInterface)rotation.Transitions=new Transitions {new DoubleTransition {Property=RotateTransform.AngleProperty,Duration=TimeSpan.FromMilliseconds(135)}};
                 Grid.SetColumn(arrow,1);
-                var title=new ContentPresenter {FontSize=12,VerticalAlignment=VerticalAlignment.Center};title.Bind(ContentPresenter.ContentProperty,new Binding("Header"){Source=owner});heading.Children.Add(title);heading.Children.Add(arrow);
-                var toggle=new Button {Content=heading,Height=28,Padding=new Thickness(0),Background=Brushes.Transparent,BorderThickness=new Thickness(0),CornerRadius=new CornerRadius(4),Cursor=new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand),HorizontalAlignment=HorizontalAlignment.Stretch,HorizontalContentAlignment=HorizontalAlignment.Stretch};
+                var title=new ContentPresenter {FontSize=UiMetrics.CaptionSize,VerticalAlignment=VerticalAlignment.Center};title.Bind(ContentPresenter.ContentProperty,new Binding("Header"){Source=owner});heading.Children.Add(title);heading.Children.Add(arrow);
+                var toggle=new Button {Content=heading,Height=UiMetrics.InspectorRowHeight,Padding=new Thickness(0),Background=Brushes.Transparent,BorderThickness=new Thickness(0),CornerRadius=new CornerRadius(4),Cursor=new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand),HorizontalAlignment=HorizontalAlignment.Stretch,HorizontalContentAlignment=HorizontalAlignment.Stretch};
                 toggle.PointerEntered+=(_,_)=>toggle.Background=_p.Hover;
                 toggle.PointerExited+=(_,_)=>toggle.Background=Brushes.Transparent;
                 AddCopyMenu(toggle,()=>owner.Header?.ToString()??"","复制标题");
                 toggle.Click+=(_,_)=>owner.IsExpanded=!owner.IsExpanded;
                 // The disclosure glyph sits outside the content column; expanded fields keep
                 // the same left edge as the event facts above the fold.
-                var body=new ContentPresenter {Margin=new Thickness(0,2,0,8),Opacity=owner.IsExpanded?1:0};
+                var body=new ContentPresenter {Margin=new Thickness(0,2,0,UiMetrics.Space2),Opacity=owner.IsExpanded?1:0};
                 if(_animateInterface)body.Transitions=new Transitions {new DoubleTransition {Property=OpacityProperty,Duration=TimeSpan.FromMilliseconds(135)}};
                 body.Bind(ContentPresenter.ContentProperty,new Binding("Content"){Source=owner});body.Bind(IsVisibleProperty,new Binding("IsExpanded"){Source=owner});
                 var fadeVersion=0;

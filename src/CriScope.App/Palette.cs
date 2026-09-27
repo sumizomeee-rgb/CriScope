@@ -7,6 +7,7 @@ namespace CriScope.App;
 internal sealed class Palette(bool light)
 {
     private readonly Dictionary<string,IBrush> _categoryBrushes=new(StringComparer.Ordinal);
+    private readonly Dictionary<int,IBrush> _indexedCategoryBrushes=[];
     private static readonly string[] LightCategoryColors=["#B35D44", "#477C99", "#8C678F", "#5E8357", "#AD7D33", "#538282", "#A55B72", "#6B76A2", "#877747", "#63866C", "#A06257", "#6C7E9A"];
     private static readonly string[] DarkCategoryColors=["#E6A18B", "#83BEDB", "#C0A2CE", "#9EC58B", "#E0BB73", "#8DCBC9", "#DCA0B6", "#A4B0DA", "#C9BF82", "#A2C9AE", "#D7A69B", "#A6BDDE"];
     public bool Light { get; } = light;
@@ -55,6 +56,31 @@ internal sealed class Palette(bool light)
         uint hash = 2166136261; foreach(char c in id){hash ^= c;hash *= 16777619;}
         var colors=Light?LightCategoryColors:DarkCategoryColors;
         return _categoryBrushes[id]=B(colors[hash % colors.Length]);
+    }
+    public IBrush Category(int groupOrdinal)
+    {
+        if(groupOrdinal<0)return Muted;
+        if(_indexedCategoryBrushes.TryGetValue(groupOrdinal,out var cached))return cached;
+        // Use the order within the selected Category Group, not a name hash.
+        // Every member has a distinct hue, including groups larger than the curated set.
+        var colors=Light?LightCategoryColors:DarkCategoryColors;
+        return _indexedCategoryBrushes[groupOrdinal]=groupOrdinal<colors.Length
+            ? B(colors[groupOrdinal]) : ExtendedCategory(groupOrdinal);
+    }
+    private IBrush ExtendedCategory(int ordinal)
+    {
+        var hue=(ordinal*137.50776405)%360;
+        var saturation=Light ? 0.58 : 0.47;
+        var value=Light ? 0.68 : 0.84;
+        var chroma=saturation*value;
+        var secondary=chroma*(1-Math.Abs((hue/60)%2-1));
+        var offset=value-chroma;
+        var (red,green,blue)=hue switch {
+            <60=>(chroma,secondary,0d),<120=>(secondary,chroma,0d),
+            <180=>(0d,chroma,secondary),<240=>(0d,secondary,chroma),
+            <300=>(secondary,0d,chroma),_=>(chroma,0d,secondary) };
+        return new SolidColorBrush(Color.FromRgb((byte)Math.Round((red+offset)*255),
+            (byte)Math.Round((green+offset)*255),(byte)Math.Round((blue+offset)*255)));
     }
     private static IBrush B(string color) => Brush.Parse(color);
 }

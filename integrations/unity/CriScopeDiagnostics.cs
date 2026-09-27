@@ -20,8 +20,13 @@ namespace CriScope.Unity
         private CriScopeMonitor monitor;
         private string monitorNote;
         private bool subscribed, closing;
-        private float nextSample, nextMemorySample;
-        [Serializable] private sealed class CueMetadata { public string[] categories; public string basis = "cue-config"; }
+        private float nextSample, nextMemorySample, nextCategoryCatalogSample, lastCategoryCatalogEmit;
+        [Serializable] private sealed class CategoryEntry { public string name; public int index, groupNo, ordinal; }
+        [Serializable] private sealed class CategoryCatalog { public CategoryEntry[] firstGroupCategories; public int firstGroupNo; public string basis = "acf-category-catalog"; }
+        [Serializable] private sealed class CueMetadata { public string[] categories; public CategoryEntry[] categoryDetails; public int firstGroupNo; public string basis = "cue-config"; }
+        private int firstCategoryGroupNo = -1;
+        private string categoryCatalogSignature;
+        private readonly Dictionary<ushort, int> firstGroupOrdinals = new Dictionary<ushort, int>();
         private readonly Dictionary<uint, int> blocks = new Dictionary<uint, int>();
         private readonly HashSet<uint> tracked = new HashSet<uint>();
         private readonly Dictionary<uint, float> cueMetadata = new Dictionary<uint, float>();
@@ -87,6 +92,7 @@ namespace CriScope.Unity
         private void Sample()
         {
             if (!CriAtomPlugin.IsLibraryInitialized()) { SetCaptureEnabled(false); return; }
+            SampleCategoryCatalog();
             if (Time.realtimeSinceStartup >= nextMemorySample)
             {
                 nextMemorySample = Time.realtimeSinceStartup + 1f;
@@ -111,12 +117,17 @@ namespace CriScope.Unity
                 {
                     cueMetadata[playbackId] = Time.realtimeSinceStartup;
                     var categoryNames = new List<string>();
+                    var categoryDetails = new List<CategoryEntry>();
                     if (cue.categories != null) foreach (ushort index in cue.categories)
                     {
                         CriAtomExAcf.CategoryInfo category;
-                        if (index != ushort.MaxValue && CriAtomExAcf.GetCategoryInfoByIndex(index, out category) && !string.IsNullOrEmpty(category.name) && !categoryNames.Contains(category.name)) categoryNames.Add(category.name);
+                        if (index == ushort.MaxValue || !CriAtomExAcf.GetCategoryInfoByIndex(index, out category) || string.IsNullOrEmpty(category.name) || categoryNames.Contains(category.name)) continue;
+                        categoryNames.Add(category.name);
+                        int ordinal;
+                        if (category.groupNo <= int.MaxValue)
+                            categoryDetails.Add(new CategoryEntry { name = category.name, index = index, groupNo = (int)category.groupNo, ordinal = firstGroupOrdinals.TryGetValue(index, out ordinal) ? ordinal : -1 });
                     }
-                    bridge.Emit(new WireEvent { kind = "cue-info", objectId = "playback:" + playbackId, name = source.cueName, value = cue.length, raw = JsonUtility.ToJson(new CueMetadata { categories = categoryNames.ToArray() }),
+                    bridge.Emit(new WireEvent { kind = "cue-info", objectId = "playback:" + playbackId, name = source.cueName, value = cue.length, raw = JsonUtility.ToJson(new CueMetadata { categories = categoryNames.ToArray(), categoryDetails = categoryDetails.ToArray(), firstGroupNo = firstCategoryGroupNo }),
                         detail = "SDK Cue 标注时长（毫秒）；组件最新播放的可选信息，不等于 Voice 实际历时" });
                 }
             }
@@ -137,6 +148,39 @@ namespace CriScope.Unity
                 }
             }
             foreach (var id in ended) { tracked.Remove(id); cueMetadata.Remove(id); }
+        }
+        private void SampleCategoryCatalog()
+        {
+            float now = Time.realtimeSinceStartup;
+            if (now < nextCategoryCatalogSample) return;
+            nextCategoryCatalogSample = now + .5f;
+            int count;
+            try { count = CriAtomExAcf.GetNumCategories(); }
+            catch (Exception) { firstCategoryGroupNo = -1; firstGroupOrdinals.Clear(); return; }
+            var all = new List<CategoryEntry>();
+            for (int index = 0; index < count && index <= ushort.MaxValue; index++)
+            {
+                CriAtomExAcf.CategoryInfo info;
+                if (!CriAtomExAcf.GetCategoryInfoByIndex((ushort)index, out info) || string.IsNullOrEmpty(info.name) || info.groupNo > int.MaxValue) continue;
+                all.Add(new CategoryEntry { name = info.name, index = index, groupNo = (int)info.groupNo, ordinal = -1 });
+            }
+            int first = int.MaxValue;
+            foreach (var entry in all) if (entry.groupNo < first) first = entry.groupNo;
+            firstCategoryGroupNo = first == int.MaxValue ? -1 : first;
+            firstGroupOrdinals.Clear();
+            var members = new List<CategoryEntry>();
+            foreach (var entry in all) if (entry.groupNo == firstCategoryGroupNo)
+            {
+                entry.ordinal = members.Count;
+                members.Add(entry);
+                firstGroupOrdinals[(ushort)entry.index] = entry.ordinal;
+            }
+            string signature = firstCategoryGroupNo + ":" + string.Join("|", members.ConvertAll(e => e.index + "/" + e.name).ToArray());
+            if (signature == categoryCatalogSignature && now - lastCategoryCatalogEmit < 60f) return;
+            categoryCatalogSignature = signature;
+            lastCategoryCatalogEmit = now;
+            bridge.Emit(new WireEvent { kind = "category-catalog", name = "ACF Category Group", raw = JsonUtility.ToJson(new CategoryCatalog { firstGroupNo = firstCategoryGroupNo, firstGroupCategories = members.ToArray() }),
+                detail = "SDK ACF Category 顺序；仅用于实例颜色归属" });
         }
         private void Metric(string name, double value, string detail) { bridge.Emit(new WireEvent { kind = "metric", name = name, value = value, detail = detail }); }
         private void Beat(ref CriAtomExBeatSync.Info info)

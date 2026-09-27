@@ -34,6 +34,8 @@ public sealed class TimelineControl : Control
     public Func<double,DateTimeOffset?>? ClockTimeAt { get; set; }
     public bool PreferWallTime { get; set; } = true;
     public bool ShowingWallTime => PreferWallTime && ClockTimeAt?.Invoke(End) is not null;
+    public Rect TimeAxisToggleBounds => new(8,(UiMetrics.TimelineRulerHeight-UiMetrics.IconTarget)/2,UiMetrics.IconTarget,UiMetrics.IconTarget);
+    public bool TimeAxisToggleHovered => _axisToggleHovered;
     public string DisplayStamp(double time) => ShowingWallTime && ClockTimeAt?.Invoke(time) is { } value
         ? value.ToLocalTime().ToString("MM-dd HH:mm:ss.fff",CultureInfo.InvariantCulture) : Stamp(time);
     public event Action<bool>? TimeAxisModeChanged;
@@ -130,11 +132,15 @@ public sealed class TimelineControl : Control
     private readonly HashSet<string> _expanded = [];
     private readonly List<(Rect rect, string key)> _toggleHits = [];
     private readonly List<(Rect rect, WireEvent? item, string? key)> _spatialHits = [];
+    private bool _axisToggleHovered, _axisKeyboardFocus;
+    private Rect? _hoverToggleRect;
     private WireEvent[]? _groupEvents, _groupGaps, _controlEvents, _controlAssociationEvents;
     private double _groupEnd=double.NaN, _controlEnd=double.NaN;
     private WireEvent[]? _categoryAssociationEvents;
     private double _categoryEnd=double.NaN;
     private Dictionary<(string Session,string Channel,string Playback),WireEvent[]> _categoriesByPlayback=[];
+    private Dictionary<string,WireEvent> _cueInfoByPlayback=[];
+    private WireEvent[] _categoryCatalogs=[];
     private int _controlMask;
     private PlaybackGroup[] _playbackGroups=[];
     private ControlGroup[] _controlRows=[];
@@ -160,8 +166,23 @@ public sealed class TimelineControl : Control
                 .ToDictionary(g=>g.Key,g=>g.GroupBy(e=>e.objectId,StringComparer.Ordinal)
                     .Select(items=>items.OrderBy(e=>e.time).ThenBy(e=>e.seq).Last())
                     .OrderBy(e=>e.name,StringComparer.Ordinal).ThenBy(e=>e.objectId,StringComparer.Ordinal).ToArray());
+            _cueInfoByPlayback=evidence.Where(e=>e.kind=="cue-info"&&e.time<=End)
+                .Select(e=>(Playback:e.parentId.Length>0?e.parentId:e.objectId,Event:e))
+                .Where(item=>item.Playback.StartsWith("playback:",StringComparison.Ordinal))
+                .GroupBy(item=>item.Playback,StringComparer.Ordinal)
+                .ToDictionary(g=>g.Key,g=>g.OrderBy(item=>item.Event.time).ThenBy(item=>item.Event.seq).Last().Event,StringComparer.Ordinal);
+            _categoryCatalogs=evidence.Where(e=>e.kind=="category-catalog"&&e.time<=End)
+                .OrderBy(e=>e.time).ThenBy(e=>e.seq).ToArray();
         }
         return _categoriesByPlayback.GetValueOrDefault((anchor.session,anchor.channel,group.Id))??[];
+    }
+    private PrimaryGroupCategory? PrimaryCategoryFor(PlaybackGroup group,WireEvent[] categories)
+    {
+        var observedAt=categories.Length>0?categories.Max(e=>e.time):AssociationPresentation.Anchor(group)?.time??End;
+        var catalog=_categoryCatalogs.LastOrDefault(e=>e.time<=observedAt+.1);
+        _cueInfoByPlayback.TryGetValue(group.Id,out var cueInfo);
+        if(cueInfo?.name!=group.Name)cueInfo=null;
+        return PlaybackCategoryPresentation.Resolve(catalog,cueInfo,categories);
     }
     private ControlGroup[] ControlRows()
     {
@@ -174,7 +195,7 @@ public sealed class TimelineControl : Control
         }
         return _controlRows;
     }
-    private const double LabelWidth = 214;
+    private const double LabelWidth = UiMetrics.TimelineLabelWidth;
     private const double PlaybackRowHeight = 44;
     private double PlotWidth => Math.Max(40, Bounds.Width-LabelWidth-22);
     private double MixingViewportHeight => Math.Max(1,Bounds.Height-106);
@@ -194,9 +215,32 @@ public sealed class TimelineControl : Control
     private void SelectTimeAxis(bool wall)
     {
         if(PreferWallTime==wall)return;
-        PreferWallTime=wall;TimeAxisModeChanged?.Invoke(wall);ViewChanged?.Invoke();InvalidateVisual();
+        PreferWallTime=wall;
+        if(_axisToggleHovered)ToolTip.SetTip(this,TimeAxisToggleTip());
+        TimeAxisModeChanged?.Invoke(wall);ViewChanged?.Invoke();InvalidateVisual();
     }
     public void SetTimeAxisMode(bool wall) => SelectTimeAxis(wall);
+    private bool TimeAxisToggleVisible => (Events.Length>0||SupplementMetrics.Length>0) && (Mode is "Timeline" or "AISAC" or "Performance");
+    private string TimeAxisToggleTip() => PreferWallTime
+        ? ShowingWallTime ? "当前：钟表时间 · 点击切换为相对时间" : "偏好：钟表时间 · 当前无时钟映射 · 点击切换为相对时间"
+        : "当前：相对时间 · 点击切换为钟表时间";
+    private void DrawTimeAxisToggle(DrawingContext c)
+    {
+        var target=TimeAxisToggleBounds;
+        if(_axisToggleHovered)c.DrawRectangle(Palette.Hover,null,target,7,7);
+        if(_axisKeyboardFocus)c.DrawRectangle(null,new Pen(Palette.Selection,1.5),target.Deflate(1),6,6);
+        var center=target.Center;
+        var iconBrush=ShowingWallTime?Palette.Selection:Palette.Muted;
+        var pen=new Pen(iconBrush,1.4);
+        c.DrawEllipse(null,pen,center,7.5,7.5);
+        c.DrawLine(pen,center,new Point(center.X,center.Y-4));
+        c.DrawLine(pen,center,new Point(center.X+3.2,center.Y+1.7));
+    }
+    private void SetAxisToggleHovered(bool hovered)
+    {
+        if(_axisToggleHovered==hovered)return;
+        _axisToggleHovered=hovered;InvalidateVisual();
+    }
     private static double WallTickStep(double span,double width)
     {
         var pixels=span<1?110:span>=3600?100:78;
@@ -231,6 +275,17 @@ public sealed class TimelineControl : Control
         Cursor=rect.HasValue?LinkCursor:null;
         InvalidateVisual();
     }
+    private void SetHoveredToggle(Rect? rect)
+    {
+        if(_hoverToggleRect==rect)return;
+        _hoverToggleRect=rect;InvalidateVisual();
+    }
+    private static string ToggleTip(string key) => key.StartsWith("control:",StringComparison.Ordinal)
+        ? $"筛选 {ControlPresentation.KindLabel(key[8..])} · 可多选"
+        : key switch {
+            "source"=>"显示或隐藏音源",
+            "distance-listener"=>"显示或隐藏衰减监听点",
+            _=>"显示或隐藏基础监听器" };
     private WireEvent? UpdateLinkHover(Point point)
     {
         var link=_links.LastOrDefault(h=>h.Rect.Contains(point));
@@ -241,6 +296,7 @@ public sealed class TimelineControl : Control
     public TimelineControl()
     {
         ClipToBounds=true; Focusable=true; MinHeight=220;
+        GotFocus += (_,_)=>{_axisKeyboardFocus=true;InvalidateVisual();};
         PointerWheelChanged += (_,e) => {
             SetHoveredLink(null);
             if(Mode=="Location")
@@ -262,7 +318,9 @@ public sealed class TimelineControl : Control
             if(Mode!="Mixing"||e.KeyModifiers.HasFlag(KeyModifiers.Control)||e.KeyModifiers.HasFlag(KeyModifiers.Shift))ViewChanged?.Invoke();InvalidateVisual();e.Handled=true;
         };
         PointerPressed += (_,e) => {
-            Focus();var p=e.GetPosition(this);
+            Focus();_axisKeyboardFocus=false;var p=e.GetPosition(this);
+            if(TimeAxisToggleVisible&&TimeAxisToggleBounds.Contains(p))
+            {SelectTimeAxis(!PreferWallTime);e.Handled=true;return;}
             if(Mode=="Location"&&SpatialOverlayBounds.Contains(p))
             {
                 SetHoveredLink(null);
@@ -305,9 +363,15 @@ public sealed class TimelineControl : Control
         };
         PointerMoved += (_,e) => {
             var p=e.GetPosition(this);
-            if(_spatialScrollDragging){SetHoveredLink(null);SetSpatialScrollFromPointer(p.Y);e.Handled=true;return;}
-            if(_scrollDragging){SetHoveredLink(null);SetMixingScrollFromPointer(p.Y);e.Handled=true;return;}
-            if(Mode=="Location"&&SpatialOverlayBounds.Contains(p)){SetHoveredLink(null);ToolTip.SetTip(this,null);ToolTip.SetIsOpen(this,false);return;}
+            if(_drag==null&&!_spatialScrollDragging&&!_scrollDragging&&TimeAxisToggleVisible&&TimeAxisToggleBounds.Contains(p))
+            {SetHoveredToggle(null);SetHoveredLink(null);SetAxisToggleHovered(true);Cursor=LinkCursor;ToolTip.SetTip(this,TimeAxisToggleTip());return;}
+            if(_axisToggleHovered){SetAxisToggleHovered(false);Cursor=null;}
+            if(_spatialScrollDragging){SetHoveredToggle(null);SetHoveredLink(null);SetSpatialScrollFromPointer(p.Y);e.Handled=true;return;}
+            if(_scrollDragging){SetHoveredToggle(null);SetHoveredLink(null);SetMixingScrollFromPointer(p.Y);e.Handled=true;return;}
+            if(Mode=="Location"&&SpatialOverlayBounds.Contains(p)){SetHoveredToggle(null);SetHoveredLink(null);ToolTip.SetTip(this,null);ToolTip.SetIsOpen(this,false);return;}
+            var toggle=_drag==null?_toggleHits.LastOrDefault(h=>h.rect.Contains(p)):default;
+            SetHoveredToggle(toggle.key==null?null:toggle.rect);
+            if(toggle.key!=null){SetHoveredLink(null);Cursor=LinkCursor;ToolTip.SetTip(this,ToggleTip(toggle.key));return;}
             var linkEvent=_drag==null?UpdateLinkHover(p):null;
             if(linkEvent!=null){ToolTip.SetTip(this,"定位声音时间线 · "+linkEvent.name);return;}
             if(_drag!=null)SetHoveredLink(null);
@@ -321,11 +385,11 @@ public sealed class TimelineControl : Control
             else{SelectionStart=Start+Math.Clamp((start.X-LabelWidth)/PlotWidth,0,1)*ViewSpan;SelectionEnd=Start+Math.Clamp((p.X-LabelWidth)/PlotWidth,0,1)*ViewSpan;}
             ViewChanged?.Invoke();InvalidateVisual();
         };
-        PointerExited += (_,_)=>{SetHoveredLink(null);ToolTip.SetTip(this,null);};
+        PointerExited += (_,_)=>{SetAxisToggleHovered(false);SetHoveredToggle(null);SetHoveredLink(null);Cursor=null;ToolTip.SetTip(this,null);};
         PointerReleased += (_,e)=>{_drag=null;_scrollDragging=false;_spatialScrollDragging=false;e.Pointer.Capture(null);};
-        KeyDown += (_,e)=>{if(e.Key==Key.Escape&&Mode=="Location"&&_spatialExpandedKey!=null){CloseSpatialList();e.Handled=true;}else if(e.Key==Key.Space){_space=true;e.Handled=true;}};
+        KeyDown += (_,e)=>{if(e.Key==Key.Enter&&_axisKeyboardFocus&&TimeAxisToggleVisible){SelectTimeAxis(!PreferWallTime);e.Handled=true;}else if(e.Key==Key.Escape&&Mode=="Location"&&_spatialExpandedKey!=null){CloseSpatialList();e.Handled=true;}else if(e.Key==Key.Space){_space=true;e.Handled=true;}};
         KeyUp += (_,e)=>{if(e.Key==Key.Space){_space=false;e.Handled=true;}};
-        LostFocus += (_,_)=>_space=false;
+        LostFocus += (_,_)=>{_space=false;_axisKeyboardFocus=false;InvalidateVisual();};
     }
     private void SetMixingScrollFromPointer(double y)
     { var track=MixingScrollTrack;var thumb=MixingScrollThumb;_vertical=Math.Clamp((y-_scrollGrab-track.Y)/Math.Max(1,track.Height-thumb.Height),0,1)*MixingMaxScroll;InvalidateVisual(); }
@@ -347,7 +411,7 @@ public sealed class TimelineControl : Control
     {Text(c,title,26,105,Palette.Text,18);Text(c,description,26,141,size:12);}
     public override void Render(DrawingContext c)
     {
-        _relatedCueBounds.Clear();base.Render(c);c.FillRectangle(Palette.Canvas,new Rect(Bounds.Size));_links.Clear();_hits.Clear();_playbackTips.Clear();_expandHits.Clear();_toggleHits.Clear();_spatialHits.Clear();_spatialListHits.Clear();SpatialOverlayBounds=default;SpatialOverlayMaxScroll=0;_spatialExpandedKey=null;
+        base.Render(c);c.FillRectangle(Palette.Canvas,new Rect(Bounds.Size));_links.Clear();_hits.Clear();_playbackTips.Clear();_relatedCueBounds.Clear();_expandHits.Clear();_toggleHits.Clear();_spatialHits.Clear();_spatialListHits.Clear();SpatialOverlayBounds=default;SpatialOverlayMaxScroll=0;_spatialExpandedKey=null;
         if(Events.Length==0&&SupplementMetrics.Length==0){Empty(c,"等待音频观测","在游戏里开启 CriScope 采集，或打开已有日志。");return;}
         if(Mode=="Location"){DrawLocations(c);return;}if(Mode=="Mixing"){DrawMixing(c);DrawScrollHint(c);return;}
         var axisStart=Math.Max(TimeOrigin,Start);
@@ -369,33 +433,27 @@ public sealed class TimelineControl : Control
             double step=Math.Pow(10,Math.Floor(Math.Log10(ViewSpan/8)));if(ViewSpan/step>16)step*=5;else if(ViewSpan/step>10)step*=2;
             for(double t=Math.Max(TimeOrigin,TimeOrigin+Math.Ceiling((Start-TimeOrigin)/step)*step);t<=End;t+=step){var x=X(t);c.DrawLine(new Pen(Palette.TimelineGrid,.6),new Point(x,34),new Point(x,Bounds.Height-28));Text(c,Stamp(t),x+4,10,size:10);}
         }
-        c.DrawLine(new Pen(Palette.Border),new Point(0,34),new Point(Bounds.Width,34));
-        if(Mode=="AISAC")DrawControls(c);else if(Mode=="Performance")DrawResources(c);else DrawTracks(c);
+        c.DrawLine(new Pen(Palette.Border),new Point(0,UiMetrics.TimelineRulerHeight),new Point(Bounds.Width,UiMetrics.TimelineRulerHeight));
+        DrawTimeAxisToggle(c);
+        // Guides are background geometry: cards, labels and event markers must paint above them.
         if(SelectionStart is {} a&&SelectionEnd is {} b&&Math.Abs(a-b)>.000001){var l=Math.Clamp(X(Math.Min(a,b)),LabelWidth,LabelWidth+PlotWidth);var r=Math.Clamp(X(Math.Max(a,b)),LabelWidth,LabelWidth+PlotWidth);c.DrawRectangle(null,new Pen(Palette.Selection,1.5),new Rect(l,35,Math.Max(0,r-l),Math.Max(0,Bounds.Height-64)));}
         if(Selected is {} selected&&selected.time>=Start&&selected.time<=End) {
-            var x=X(selected.time);double top=35,bottom=Bounds.Height-28;
+            var x=X(selected.time);
             if(Mode=="AISAC")
             {
                 c.DrawLine(new Pen(Palette.Selection,1.5),new Point(x,28),new Point(x,34));
                 c.DrawEllipse(Palette.Selection,null,new Point(x,28),2,2);
             }
-            else
-            {
-                foreach(var rect in _relatedCueBounds.Where(r=>x>=r.Left&&x<=r.Right).OrderBy(r=>r.Top)) {
-                    var end=Math.Clamp(rect.Top,top,bottom);
-                    if(end>top)c.DrawLine(new Pen(Palette.Selection,1),new Point(x,top),new Point(x,end));
-                    top=Math.Clamp(Math.Max(top,rect.Bottom),top,bottom);
-                }
-                if(top<bottom)c.DrawLine(new Pen(Palette.Selection,1),new Point(x,top),new Point(x,bottom));
-            }
+            else c.DrawLine(new Pen(Palette.Selection,1),new Point(x,35),new Point(x,Bounds.Height-28));
         }
-        c.FillRectangle(Palette.Canvas,new Rect(0,Bounds.Height-28,Bounds.Width,28));Text(c,"Ctrl 滚轮缩放 · 中键 / 空格拖动浏览历史 · Shift 拖动选区",12,Bounds.Height-21,size:10);
+        if(Mode=="AISAC")DrawControls(c);else if(Mode=="Performance")DrawResources(c);else DrawTracks(c);
+        c.FillRectangle(Palette.Canvas,new Rect(0,Bounds.Height-28,Bounds.Width,28));Text(c,"Ctrl 缩放 · 空格拖动 · Shift 选区",16,Bounds.Height-20,size:10);
         if(Live)Text(c,SourceConnected?"实时":"已断开",Bounds.Width-64,Bounds.Height-21,SourceConnected?Palette.Good:Palette.Request,10);
     }
     private void DrawTracks(DrawingContext c)
     {
-        Text(c,"播放实例",14,46,Palette.Text,11);
-        Text(c,"声音活动",LabelWidth+10,46,Palette.Muted,11);
+        Text(c,"播放实例",16,45,Palette.Text,12);
+        Text(c,"声音活动",LabelWidth+10,45,Palette.Muted,11);
         c.DrawLine(new Pen(Palette.TimelineGrid,1),new Point(LabelWidth,34),new Point(LabelWidth,Bounds.Height-28));
         var groups=PlaybackGroups();
         double y=75-_vertical;int row=0;
@@ -414,18 +472,13 @@ public sealed class TimelineControl : Control
             var selectedId = Selected?.entity == "voice" ? Selected.parentId : Selected?.objectId;
             if(selectedId == group.Id) HighlightRow(c,new Rect(1,y+1,Bounds.Width-22,PlaybackRowHeight-2));
             var categories=CategoriesFor(group,anchor);
-            var categoryColors=categories.Select(e=>Palette.Category(string.IsNullOrWhiteSpace(e.name)?e.objectId:e.name)).ToArray();
-            if(categories.Length>0)
-            {
-                var count=Math.Min(3,categories.Length);
-                for(int i=0;i<count;i++)
-                    c.FillRectangle(categoryColors[i],new Rect(5,y+7+i*10,3,categories.Length==1?27:7));
-            }
+            var primaryCategory=PrimaryCategoryFor(group,categories);
+            var categoryBrush=primaryCategory is null?Palette.Muted:Palette.Category(primaryCategory.Ordinal);
+            if(primaryCategory!=null)c.FillRectangle(categoryBrush,new Rect(5,y+8,3,28));
             using(c.PushTransform(Matrix.CreateTranslation(15,y+18)))
                 c.DrawGeometry(null,new Pen(Palette.Muted,1.2),expanded?ExpandedChevron:CollapsedChevron);
             using(c.PushClip(new Rect(29,y+2,LabelWidth-39,18)))
-                Text(c,Elide(group.Name,LabelWidth-(categories.Length>3?67:42),12),30,y+3,Palette.Text,12);
-            if(categories.Length>3)Text(c,"+"+(categories.Length-3),LabelWidth-30,y+5,Palette.Muted,9);
+                Text(c,Elide(group.Name,LabelWidth-42,12),30,y+3,Palette.Text,12);
             var status=!SourceConnected&&group.ActiveVoiceCount>0?"已断开 · 保留最后状态":group.StatusLabel;
             var duration=group.DurationAt(End);
             var durationText=duration is {} seconds?seconds.ToString("0.000",CultureInfo.InvariantCulture)+" 秒":"";
@@ -455,8 +508,7 @@ public sealed class TimelineControl : Control
             }
             foreach(var interval in group.VoiceIntervals)
                 DrawInterval(interval.Begin,interval.End,group.End,y,PlaybackRowHeight,
-                    categoryColors.Length==1?categoryColors[0]:Palette.Muted,
-                    interval.Begin.kind!="play"||PlaybackPresentation.IsUnknownStart(interval.Begin),categoryColors);
+                    categoryBrush,interval.Begin.kind!="play"||PlaybackPresentation.IsUnknownStart(interval.Begin));
             y+=PlaybackRowHeight;
             if(!expanded)continue;
             foreach(var voice in voiceRows)
@@ -469,15 +521,15 @@ public sealed class TimelineControl : Control
                 var state=stop!=null?"已结束":group.End!=null?"实例已结束":group.HasEvidenceGap?"采集中断":SourceConnected?"播放中":"已断开";
                 var elapsed=stop!=null&&!unknown?(stop.time-begin.time).ToString("0.000",CultureInfo.InvariantCulture)+" 秒":unknown?"开始时间未记录":"+"+Stamp(begin.time);
                 Text(c,state+" · "+elapsed,28,y+21,size:9);
-                DrawInterval(begin,stop,group.End,y,38,Palette.Voice,unknown,[]);
+                DrawInterval(begin,stop,group.End,y,38,Palette.Voice,unknown);
                 _hits.Add((new Rect(24,y,LabelWidth-24,38),begin));y+=38;
             }
             if(voiceRows.Length==0){Text(c,group.Voices.Length==0?"此请求没有关联的 Voice 记录":"当前范围没有 Voice 区间",28,y+10,size:10);y+=38;}
         }
         _contentHeight=y+_vertical-75;
-        if(row==0)Empty(c,"当前范围没有播放实例","每次 Cue 播放独立成行；静音 Voice 同样保留。可调整时间范围查看历史。");
+        if(row==0)Empty(c,"当前范围没有播放实例","可调整时间范围查看历史。");
 
-        void DrawInterval(WireEvent begin,WireEvent? voiceStop,WireEvent? instanceEnd,double top,double height,IBrush brush,bool unknown,IBrush[] categoryColors)
+        void DrawInterval(WireEvent begin,WireEvent? voiceStop,WireEvent? instanceEnd,double top,double height,IBrush brush,bool unknown)
         {
             if(!VisibleRow(top,height))return;
             var stop=voiceStop;
@@ -490,11 +542,7 @@ public sealed class TimelineControl : Control
             var left=Math.Max(LabelWidth,X(begin.time));var right=Math.Min(LabelWidth+PlotWidth,X(end));
             if(right<left)return;
             var center=top+height/2;var width=Math.Max(2,right-left);
-            c.FillRectangle(brush,new Rect(left,center-(categoryColors.Length>1?4:3),width,categoryColors.Length>1?8:6));
-            // Parallel hairlines communicate simultaneous Category membership, not time segments.
-            if(categoryColors.Length>1)
-                for(int i=0;i<Math.Min(3,categoryColors.Length);i++)
-                    c.FillRectangle(categoryColors[i],new Rect(left,center-3.3+i*2.2,width,1.5));
+            c.FillRectangle(brush,new Rect(left,center-3,width,6));
             if(unknown){c.DrawLine(new Pen(brush,1.5),new Point(left+7,center-6),new Point(left,center));c.DrawLine(new Pen(brush,1.5),new Point(left,center),new Point(left+7,center+6));}
             else if(begin.time>=Start)c.DrawLine(new Pen(brush,2),new Point(left,center-9),new Point(left,center+9));
             if(stop!=null)c.DrawLine(new Pen(Palette.Muted,2),new Point(right,center-9),new Point(right,center+9));
@@ -516,9 +564,8 @@ public sealed class TimelineControl : Control
             DrawToggle(c,new Rect(chipX,chipY,width,25),ControlPresentation.KindLabel(kind),ControlKinds.Contains(kind),"control:"+kind,Palette.Control(kind));
             chipX+=width+7;
         }
-        if(chipX+215<Bounds.Width)Text(c,"可多选 · 展开看对象 · 点击子行看记录",chipX+8,chipY+6,size:10);
         var groups=ControlRows();
-        if(groups.Length==0){_contentHeight=0;Empty(c,ControlKinds.Count==0?"尚未选择控制类型":"当前筛选没有记录",ControlKinds.Count==0?"点击上方分类，可同时查看多种控制。":"显示采集到的设置和事件；连接之前的值不会补造。");return;}
+        if(groups.Length==0){_contentHeight=0;Empty(c,ControlKinds.Count==0?"尚未选择控制类型":"当前筛选没有记录",ControlKinds.Count==0?"选择上方类型以查看记录。":"可调整筛选或时间范围。");return;}
         var contentTop=chipY+33;
         double y=contentTop-_vertical;int i=0;
         using var clip=c.PushClip(new Rect(0,contentTop-5,Bounds.Width,Math.Max(0,Bounds.Height-contentTop-23)));
@@ -553,7 +600,7 @@ public sealed class TimelineControl : Control
                 using(c.PushClip(new Rect(26,y+1,LabelWidth-32,rowHeight)))
                 {
                     Text(c,row.Name,28,y+4,brush,12);
-                    Text(c,$"{row.Records.Length} 条记录"+(samples.Length==0?" · 本窗无新"+(last.kind is "aisac" or "selector"?"设置":"记录"):""),28,y+25,size:10);
+                    Text(c,$"{row.Records.Length} 条"+(samples.Length==0?" · 本窗无新记录":""),28,y+25,size:10);
                 }
                 var owners=RelatedOwners(row);
                 double left=LabelWidth+10,width=Math.Max(60,Math.Min(370,PlotWidth-30));
@@ -609,18 +656,19 @@ public sealed class TimelineControl : Control
     }
     private void DrawToggle(DrawingContext c,Rect rect,string label,bool enabled,string key,IBrush brush)
     {
-        c.FillRectangle(enabled?Palette.Panel:Palette.Canvas,rect);
-        c.DrawRectangle(null,new Pen(enabled?brush:Palette.Border,enabled?1.3:1),rect,4,4);
+        var hovered=_hoverToggleRect==rect;
+        c.DrawRectangle(hovered?Palette.Hover:enabled?Palette.Panel:Palette.Canvas,
+            new Pen(hovered?Palette.Muted:Palette.Border,.8),rect,5,5);
+        if(enabled)c.FillRectangle(brush,new Rect(rect.X+2,rect.Y+6,2,rect.Height-12));
         if(key is "source" or "distance-listener" or "listener") {
             using(c.PushTransform(Matrix.CreateScale(.55,.55)*Matrix.CreateTranslation(rect.X+8,rect.Y+5)))
-                c.DrawGeometry(null,new Pen(enabled?brush:Palette.Muted,2),key=="source"?SpeakerIcon:EarIcon);
-            Text(c,label,rect.X+29,rect.Y+5,enabled?brush:Palette.Muted,11);
+                c.DrawGeometry(null,new Pen(enabled?Palette.Text:Palette.Muted,2),key=="source"?SpeakerIcon:EarIcon);
+            Text(c,label,rect.X+29,rect.Y+5,enabled?Palette.Text:Palette.Muted,11);
         } else {
             var kind=key.StartsWith("control:")?key.Substring(8):"";
             using(c.PushTransform(Matrix.CreateScale(.5,.5)*Matrix.CreateTranslation(rect.X+8,rect.Y+6)))
-                c.DrawGeometry(null,new Pen(enabled?brush:Palette.Muted,1.8),Geometry.Parse(VisualLanguage.Path(VisualLanguage.EventIcon(kind))));
-            Text(c,label,rect.X+25,rect.Y+5,enabled?brush:Palette.Muted,11);
-            if(enabled)Text(c,"✓",rect.Right-17,rect.Y+5,brush,10);
+                c.DrawGeometry(null,new Pen(enabled?Palette.Text:Palette.Muted,1.8),Geometry.Parse(VisualLanguage.Path(VisualLanguage.EventIcon(kind))));
+            Text(c,label,rect.X+25,rect.Y+5,enabled?Palette.Text:Palette.Muted,11);
         }
         _toggleHits.Add((rect,key));
     }
@@ -633,9 +681,9 @@ public sealed class TimelineControl : Control
     internal static string MetricName(WireEvent e) => MetricPresentation.Name(e);
     private void DrawResources(DrawingContext c)
     {
-        Text(c,"资源用量",14,45,Palette.Good);
+        Text(c,"资源用量",16,45,Palette.Text,12);
         var groups=Events.Where(e=>e.kind=="metric"&&e.time<=End&&double.IsFinite(e.value)).GroupBy(e=>e.objectId+"/"+e.name).Select(g=>g.OrderBy(e=>e.time).ToArray()).Concat(SupplementMetrics.Where(e=>double.IsFinite(e.value)).Select(e=>new[]{e})).ToArray();
-        if(groups.Length==0){Empty(c,"资源指标尚未提供","Atom / FS 内存需可选 SDK 扩展。");return;}
+        if(groups.Length==0){_contentHeight=0;_vertical=0;Empty(c,"资源指标尚未提供","可通过 SDK 扩展提供 Atom / FS 内存指标。");return;}
         string Section(WireEvent e) {
             var n=(e.name+e.objectId).ToLowerInvariant();
             if(e.entity=="voice-pool")return "pool-config";
@@ -645,12 +693,39 @@ public sealed class TimelineControl : Control
             if(n.Contains("voice")||n.Contains("声部")||n.Contains("播放实例"))return "usage";
             return "technical-metrics";
         }
-        double y=76-_vertical;
-        using var clip=c.PushClip(new Rect(0,68,Bounds.Width,Math.Max(0,Bounds.Height-96)));
+        var sections=new List<(string Id,string Title,bool Fold,WireEvent[][] Rows)>();
         foreach(var (id,title,fold) in new[]{("memory","内存",false),("streaming","Streaming",false),("usage","播放用量",false),("technical-metrics","技术性能指标",true),("loudness","响度",true),("pool-config","原生声池配置 · 待核验",true)})
         {
             var rows=groups.Where(g=>Section(g[^1])==id).ToArray();
             if(rows.Length==0)continue;
+            var visibleRows=rows.Where(all=>!MetricPresentation.IsStreamingPoolCapacity(all[^1])
+                ||!rows.Any(g=>g[^1].session==all[^1].session&&MetricPresentation.IsStreamingPoolUsed(g[^1]))).ToArray();
+            sections.Add((id,title,fold,visibleRows));
+        }
+        bool CanExpandMetric(WireEvent[] all)
+        {
+            var last=all[^1];
+            return !SupplementMetrics.Contains(last)&&!MetricPresentation.IsStreamingPoolUsed(last)
+                &&last.entity!="voice-pool"&&all.Select(e=>e.time).Distinct().Take(2).Count()>1;
+        }
+        // Measure before painting. Clamping after painting caused a second invalidation at the scroll end.
+        _contentHeight=76;
+        foreach(var section in sections)
+        {
+            _contentHeight+=32;
+            if(!section.Fold||_expanded.Contains(section.Id))
+                foreach(var all in section.Rows)
+                {
+                    var last=all[^1];var key="metric:"+last.name+last.objectId;
+                    _contentHeight+=CanExpandMetric(all)&&_expanded.Contains(key)?116:42;
+                }
+            _contentHeight+=12;
+        }
+        _vertical=Math.Clamp(_vertical,0,ResourcesMaxScroll);
+        double y=76-_vertical;
+        using var clip=c.PushClip(new Rect(0,68,Bounds.Width,Math.Max(0,Bounds.Height-96)));
+        foreach(var (id,title,fold,rows) in sections)
+        {
             bool open=!fold||_expanded.Contains(id);
             if(VisibleRow(y,32)) {
                 c.FillRectangle(Palette.Panel,new Rect(8,y,Math.Max(0,Bounds.Width-16),32));
@@ -661,36 +736,36 @@ public sealed class TimelineControl : Control
             if(open)foreach(var all in rows)
             {
                 var last=all[^1];
-                if(MetricPresentation.IsStreamingPoolCapacity(last)&&rows.Any(g=>g[^1].session==last.session&&MetricPresentation.IsStreamingPoolUsed(g[^1])))continue;
-                bool pool=MetricPresentation.IsStreamingPoolUsed(last),supplement=SupplementMetrics.Contains(last);
-                var capacity=pool?rows.Select(g=>g[^1]).FirstOrDefault(e=>e.session==last.session&&MetricPresentation.IsStreamingPoolCapacity(e)):null;
+                bool pool=MetricPresentation.IsStreamingPoolUsed(last);
+                var capacity=pool?groups.Select(g=>g[^1]).FirstOrDefault(e=>e.session==last.session&&MetricPresentation.IsStreamingPoolCapacity(e)):null;
                 var key="metric:"+last.name+last.objectId;
-                bool canExpand=!supplement&&!pool&&last.entity!="voice-pool"&&all.Select(e=>e.time).Distinct().Take(2).Count()>1;
+                bool canExpand=CanExpandMetric(all);
                 bool expanded=canExpand&&_expanded.Contains(key);
                 double h=expanded?116:42;
                 if(VisibleRow(y,h)) {
                     c.FillRectangle(Palette.Alternate,new Rect(18,y,Math.Max(0,Bounds.Width-36),h));
                     c.DrawLine(new Pen(Palette.Border,2),new Point(18,y),new Point(18,y+h));
                     Text(c,(canExpand?(expanded?"▾  ":"▸  "):"")+MetricName(last),30,y+10,Palette.Text,11);
-                    Text(c,pool?MetricPresentation.StreamingPool(last,capacity):MetricPresentation.Value(last),LabelWidth+30,y+9,Palette.Good,16);
+                    var value=pool?MetricPresentation.StreamingPool(last,capacity):MetricPresentation.Value(last);
+                    var valueWidth=Math.Max(0,Bounds.Width-LabelWidth-58);
+                    using(c.PushClip(new Rect(LabelWidth+18,y+5,valueWidth,29)))
+                        Text(c,Elide(value,valueWidth,15),LabelWidth+18,y+9,Palette.Text,15);
                     if(canExpand)_expandHits.Add((new Rect(20,y,LabelWidth,h),key));
                     _hits.Add((new Rect(20,y,Math.Max(0,Bounds.Width-40),h),last));
-                    if(expanded)DrawSeries(c,all,y+31,75,Palette.Good,false);
+                    if(expanded)DrawSeries(c,all,y+31,75,Palette.Voice,false);
                 }
                 y+=h;
             }
             y+=12;
         }
-        _contentHeight=y+_vertical;
-        if(_vertical>ResourcesMaxScroll){_vertical=ResourcesMaxScroll;Avalonia.Threading.Dispatcher.UIThread.Post(InvalidateVisual);}
     }
     private void DrawMixing(DrawingContext c)
     {
         var buses=MixingPresentation.Latest(Events,End);
         _busCount=buses.Length;_busChannels=buses.Sum(b=>b.Channels.Length);
-        Text(c,"混音 / BUS METER",22,20,Palette.Text,16);
-        Text(c,BusHistoryIsSparse ? "事件后 Bus 快照 · 仅代表采样时点，不是连续电平" : "每 Bus 一行 · Peak / RMS：分别取返回槽位最大值（概览，非混合信号）",22,50,Palette.Voice,11);
-        if(buses.Length==0){_contentHeight=0;_vertical=0;Empty(c,"Bus 电平尚未提供","未观察到的路由与效果参数不会补造。请确认来源已启用相应监控。");return;}
+        Text(c,"Bus 电平",16,19,Palette.Text,16);
+        Text(c,BusHistoryIsSparse ? "事件采样 · 非连续电平" : "Peak / RMS · 返回槽位最大值",16,49,Palette.Muted,11);
+        if(buses.Length==0){_contentHeight=0;_vertical=0;Empty(c,"Bus 电平尚未提供","确认来源已启用 Bus 监控。");return;}
         double contentHeight=buses.Sum(b=>42+(_expanded.Contains("bus:"+b.Event.objectId)?b.Channels.Length*40:0));
         _contentHeight=contentHeight;_vertical=Math.Clamp(_vertical,0,MixingMaxScroll);
         double y=86-_vertical;
@@ -701,7 +776,7 @@ public sealed class TimelineControl : Control
             if(!VisibleRow(y,42+(expanded?bus.Channels.Length*40:0),75)){y+=42+(expanded?bus.Channels.Length*40:0);continue;}
             c.FillRectangle(Palette.Alternate,new Rect(0,y,Bounds.Width-18,40));
             RowName(c,(expanded?"− ":"+ ")+e.name,y+3,Palette.Voice);
-            Text(c,$"{bus.Channels.Length} 个返回槽位 · {Stamp(e.time)}",12,y+21,size:9);
+            Text(c,$"{bus.Channels.Length} 通道 · {Stamp(e.time)}",12,y+21,size:10);
             if(bus.Channels.Length==0)Text(c,"分声道数据未提供",LabelWidth+8,y+10);
             else DrawMeter(bus.MaxPeak,bus.MaxRms,y+2);
             if(y+40>75&&y<Bounds.Height-30)
@@ -726,13 +801,17 @@ public sealed class TimelineControl : Control
             c.FillRectangle(Palette.Voice,new Rect(LabelWidth+8,top+8,Math.Clamp((rms+96)/102,0,1)*width,9));
             var px=LabelWidth+8+Math.Clamp((peak+96)/102,0,1)*width;
             c.DrawLine(new Pen(peak>=0?Palette.Error:Palette.Request,2),new Point(px,top+4),new Point(px,top+21));
-            Text(c,$"P {(peakValue<=0?"−∞":peak.ToString("0.0"))} · R {(rmsValue<=0?"−∞":rms.ToString("0.0"))} dBFS",LabelWidth+width+18,top+6,size:10);
+            var readout=$"P {(peakValue<=0?"−∞":peak.ToString("0.0"))} · R {(rmsValue<=0?"−∞":rms.ToString("0.0"))} dBFS";
+            var readoutX=LabelWidth+width+18;
+            var readoutWidth=Math.Max(0,Bounds.Width-readoutX-22);
+            using(c.PushClip(new Rect(readoutX,top+3,readoutWidth,20)))
+                Text(c,Elide(readout,readoutWidth,10),readoutX,top+6,size:10);
         }
     }
     private void DrawScrollHint(DrawingContext c)
     {
         c.FillRectangle(Palette.Panel,new Rect(0,Bounds.Height-30,Bounds.Width,30));
-        Text(c,$"↕ 滚轮 / 拖动右侧滚动条 · 已观测 {_busCount} 个 Bus / {_busChannels} 个返回通道槽位",18,Bounds.Height-23,Palette.Text,12);
+        Text(c,$"{_busCount} Bus · {_busChannels} 通道",16,Bounds.Height-21,Palette.Muted,11);
         if(MixingMaxScroll<=0)return;
         c.FillRectangle(Palette.Border,MixingScrollTrack);
         c.FillRectangle(Palette.Muted,MixingScrollThumb);
@@ -741,19 +820,19 @@ public sealed class TimelineControl : Control
     private static readonly Geometry SpeakerIcon=Geometry.Parse(VisualLanguage.Path(IconKind.Source));
     private void DrawLocations(DrawingContext c)
     {
-        Text(c,"空间 / XZ 俯视",22,20,Palette.Text,16);
-        DrawToggle(c,new Rect(22,48,108,28),"音源",ShowSources,"source",Palette.Voice);
-        DrawToggle(c,new Rect(140,48,153,28),"衰减监听点",ShowDistanceListeners,"distance-listener",Palette.Listener);
-        DrawToggle(c,new Rect(304,48,155,28),"基础监听器",ShowBaseListeners,"listener",Palette.Listener);
+        Text(c,"空间 · XZ 俯视",16,19,Palette.Text,16);
+        DrawToggle(c,new Rect(16,48,108,28),"音源",ShowSources,"source",Palette.Voice);
+        DrawToggle(c,new Rect(134,48,153,28),"衰减监听点",ShowDistanceListeners,"distance-listener",Palette.Listener);
+        DrawToggle(c,new Rect(298,48,155,28),"基础监听器",ShowBaseListeners,"listener",Palette.Listener);
         var clusters=SpatialPresentation.Group(Events,End,ShowBaseListeners,ShowSources,ShowDistanceListeners);
         var positions=clusters.SelectMany(g=>g.Items).ToArray();
         if(positions.Length==0)
         {
             _contentHeight=0;
-            Empty(c,!ShowSources&&!ShowDistanceListeners&&!ShowBaseListeners?"所有空间图层已隐藏":"所选图层暂无位置", "使用上方开关切换图层；尚未收到的位置不会被设为原点。");return;
+            Empty(c,!ShowSources&&!ShowDistanceListeners&&!ShowBaseListeners?"所有空间图层已隐藏":"所选图层暂无位置", "可切换上方图层查看。");return;
         }
         bool hasListener=clusters.Any(g=>g.Entity=="distance-listener");
-        Text(c,ShowDistanceListeners&&!hasListener?"衰减监听点尚未收到完整参数":$"{positions.Count(e=>e.entity=="source")} 个音源 · {positions.Count(e=>e.entity!="source")} 个监听点",22,85,ShowDistanceListeners&&!hasListener?Palette.Request:Palette.Muted);
+        Text(c,ShowDistanceListeners&&!hasListener?"衰减监听点尚未收到完整参数":$"{positions.Count(e=>e.entity=="source")} 个音源 · {positions.Count(e=>e.entity!="source")} 个监听点",16,85,ShowDistanceListeners&&!hasListener?Palette.Request:Palette.Muted);
         var expanded=clusters.FirstOrDefault(g=>_expanded.Contains(g.Key));
         double overlayWidth=Math.Min(310,Math.Max(180,Bounds.Width-40));
         double overlayHeight=Math.Min(480,Math.Max(80,Bounds.Height-144));
@@ -772,6 +851,7 @@ public sealed class TimelineControl : Control
         Text(c,"+Z ↑",44,115,size:10);Text(c,"+X →",Math.Max(44,plotRight-42),Bounds.Height-50,size:10);
         Text(c,$"每格 {extent/2:0.##} 坐标单位",44,Bounds.Height-50,size:10);
         var labels=new List<Rect>();
+        if(expanded!=null)labels.Add(SpatialOverlayBounds.Inflate(4));
         var anchors=new List<(Point point,bool listener,SpatialCluster cluster)>();
         // Reserve listener labels first, then fit sources around them. Markers and popup have separate layers.
         foreach(var cluster in clusters.OrderBy(g=>g.Entity=="source"?1:0))DrawCluster(cluster);
@@ -785,7 +865,7 @@ public sealed class TimelineControl : Control
             if(marker.cluster.Items.Length==1)_hits.Add((hit,marker.cluster.Items[0]));
             _spatialHits.Add((hit,marker.cluster.Items.Length==1?marker.cluster.Items[0]:null,marker.cluster.Items.Length>1?marker.cluster.Key:null));
         }
-        Text(c,"耳朵 = 监听点 · 扬声器 = 音源 · 同点对象按类型聚合",22,Bounds.Height-23,size:11);
+        if(clusters.Any(cluster=>cluster.Items.Length>1))Text(c,"同点对象可展开",16,Bounds.Height-21,size:10);
         _contentHeight=0;
         if(expanded!=null)DrawExpanded(expanded);
 
