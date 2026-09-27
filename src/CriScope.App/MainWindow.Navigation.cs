@@ -74,7 +74,7 @@ public sealed partial class MainWindow
         var owners = selected.kind == "position" && selected.entity == "source"
             ? AssociationPresentation.SourcePlaybacks(_snapshot, selected, time)
             : playback != null ? new[] { playback }
-            : selected.kind is "aisac" or "selector" ? AssociationPresentation.PlayerPlaybacks(_snapshot, selected.objectId, time) : [];
+            : selected.kind is "aisac" or "selector" ? SettingRelationship(selected).Owners : [];
         foreach(var owner in owners)
         {
             if(!(_mode=="Logs" && selected.entity=="cue") && !(playback==null && selected.kind is "aisac" or "selector") && (_mode!="Timeline" || playback == null) && AssociationPresentation.Anchor(owner) is {} anchor)
@@ -89,7 +89,9 @@ public sealed partial class MainWindow
         }
         if(selected.kind != "position")
         {
-            var sources = AssociationPresentation.SourcesFor(_snapshot, owners.Select(p=>p.Id), time);
+            var sourceEvidence = selected.kind is "aisac" or "selector"
+                ? AssociationPresentation.EvidenceThrough(_snapshot, selected) : _snapshot;
+            var sources = AssociationPresentation.SourcesFor(sourceEvidence, owners.Select(p=>p.Id), time);
             foreach(var source in sources)
                 Link(sources.Length == 1 ? "" : $"音源 · X {source.x:0.#} / Z {source.z:0.#}", "Location", source);
             if(owners.Length>0 && sources.Length==0)

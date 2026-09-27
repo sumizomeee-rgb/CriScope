@@ -13,7 +13,9 @@ public sealed partial class Collector : IDisposable
     public Session[] Sessions => sessions.Values.OrderBy(s=>s.IsReplay).ThenBy(s=>s.Name).ToArray();
     public string Status {get;private set;}="尚未启动";
     public string RecordingsDirectory {get;}
-    public Collector(string directory) {RecordingsDirectory=directory;}
+    public AutomaticRecordingOptions RecordingOptions {get;}
+    public Collector(string directory,AutomaticRecordingOptions? recordingOptions=null)
+    {RecordingsDirectory=directory;RecordingOptions=recordingOptions??new();RecordingOptions.Validate();}
     public void Start(int port=18961)
     {
         listener=new TcpListener(IPAddress.Any,port);
@@ -44,12 +46,16 @@ public sealed partial class Collector : IDisposable
             session=sessions.GetOrAdd(hello.session,_=>new Session(hello));
             if(session.Pid!=hello.pid || session.Platform!=hello.platform || session.Name!=hello.name) throw new InvalidDataException("重连实例元数据不一致");
             if(active.TryGetValue(session.Id,out var previous)) previous.Dispose();
-            active[session.Id]=client;session.SetCaptureState(true,true,"SDK 扩展已连接");session.Accept(hello);
+            active[session.Id]=client;
+            session.StopRecording();
+            session.StartAutomaticRecording(RecordingsDirectory,RecordingOptions);
+            session.SetCaptureState(true,true,"SDK 扩展已连接");session.Accept(hello);
             await writer.WriteLineAsync("{\"ack\":"+session.Watermark+"}");
             while(!stop.IsCancellationRequested)
             {
                 var line=await lines.Read(stop.Token);
                 if(line==null) break;
+                if(!active.TryGetValue(session.Id,out var current) || !ReferenceEquals(current,client)) break;
                 var e=WireEvent.Parse(line);
                 if(e.kind=="hello"||!double.IsFinite(e.time)||e.time<0||e.seq<=0||e.name==null||e.detail==null||e.name.Length>4096||e.detail.Length>32768) throw new InvalidDataException("非法事件");
                 session.Accept(e,line);
@@ -60,7 +66,8 @@ public sealed partial class Collector : IDisposable
         {if(!stop.IsCancellationRequested) Status="连接结束："+e.Message;}
         finally
         {
-            if(session!=null && active.TryGetValue(session.Id,out var current) && ReferenceEquals(current,client)) {session.SetCaptureState(false,false,"SDK 扩展已断开");active.TryRemove(session.Id,out _);}
+            if(session!=null && active.TryGetValue(session.Id,out var current) && ReferenceEquals(current,client))
+            {session.SetCaptureState(false,false,"SDK 扩展已断开");session.StopRecording();active.TryRemove(session.Id,out _);}
             client.Dispose();
         }
     }
@@ -83,12 +90,12 @@ public sealed partial class Collector : IDisposable
     }
     public Session LoadRecording(string path)
     {
-        using var r=new StreamReader(path);
-        var h=WireEvent.Parse(r.ReadLine()??throw new InvalidDataException("空文件"));
+        using var lines=RecordingLines.Read(path).GetEnumerator();
+        if(!lines.MoveNext()) throw new InvalidDataException("空文件或仅有未完成的尾行");
+        var h=lines.Current;
         if(h.kind!="hello"||h.value!=1)throw new InvalidDataException("不是受支持的CriScope记录");
         var replay=new Session(h){IsReplay=true};
-        string? line;
-        while((line=r.ReadLine())!=null) {if(line.Length>65536)throw new InvalidDataException("记录行过长");if(replay.Total>=2000000)throw new InvalidDataException("当前回放上限为200万事件，请分段录制");replay.Accept(WireEvent.Parse(line));}
+        while(lines.MoveNext()) {if(replay.Total>=2000000)throw new InvalidDataException("当前回放上限为200万事件，请分段录制");replay.Accept(lines.Current);}
         sessions["replay:"+Guid.NewGuid()]=replay;
         return replay;
     }

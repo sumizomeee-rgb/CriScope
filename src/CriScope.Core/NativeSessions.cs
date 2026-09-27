@@ -42,7 +42,12 @@ public sealed partial class Collector
                 else if (e.name == "原生连接消息") session.SetCaptureState(true, false, "原生端口已连接，等待日志 · " + endpoint);
                 else session.SetCaptureState(true, true, "原生采集中 · " + endpoint);
                 ready.TrySetResult();
-            }, message => session.ConnectionStatus = message);
+            }, message =>
+            {
+                if(message.StartsWith("原生端口已连接",StringComparison.Ordinal))
+                    session.StartAutomaticRecording(RecordingsDirectory,RecordingOptions);
+                session.ConnectionStatus = message;
+            });
             capture = new NativeCapture(session, cancellation, connection);
             nativeCaptures[endpoint] = capture;
             capture.Run = Task.Run(async () =>
@@ -56,6 +61,7 @@ public sealed partial class Collector
                     session.SetCaptureState(false, false, failure ?? (cancellation.IsCancellationRequested ? "原生采集已停止" : final));
                     ready.TrySetResult();
                     connection.Dispose();
+                    session.StopRecording();
                     lock (nativeGate)
                         if (nativeCaptures.TryGetValue(endpoint, out var current) && ReferenceEquals(current, capture))
                             nativeCaptures.Remove(endpoint);

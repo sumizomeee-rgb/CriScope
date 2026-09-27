@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 namespace CriScope.Core;
 
 // 字段名与 Unity JsonUtility 协议保持一致。原始行保留用于证据和录制。
@@ -30,6 +31,9 @@ public sealed class WireEvent
     public string raw { get; set; } = "";
     public string session { get; set; } = "";
     public long seq { get; set; }
+    // Consecutive physical record number. Source seq may intentionally skip sampled Bus events.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public long recordOrdinal { get; set; }
     public double time { get; set; }
     public string name { get; set; } = "";
     public string objectId { get; set; } = "";
@@ -41,6 +45,12 @@ public sealed class WireEvent
     public double z { get; set; }
     public int pid { get; set; }
     public string platform { get; set; } = "";
+    internal WireEvent CloneForRecording(long ordinal)
+    {
+        var copy = (WireEvent)MemberwiseClone();
+        copy.recordOrdinal = ordinal;
+        return copy;
+    }
     public string ToJson() => JsonSerializer.Serialize(this);
     public static WireEvent Parse(string json) => JsonSerializer.Deserialize<WireEvent>(json) ?? throw new InvalidDataException("空事件");
 }

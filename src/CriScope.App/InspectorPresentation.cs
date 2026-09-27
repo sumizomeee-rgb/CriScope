@@ -28,12 +28,20 @@ public static class InspectorPresentation
     private static Control Merge(Control? old, Control next)
     {
         if (old == null || old.GetType() != next.GetType()) return next;
-        ToolTip.SetTip(old,ToolTip.GetTip(next));
+        var nextTip=ToolTip.GetTip(next);
+        if(!Equals(ToolTip.GetTip(old),nextTip))ToolTip.SetTip(old,nextTip);
         switch (old, next)
         {
             case (SelectableTextBlock a, SelectableTextBlock b):
-                if (a.Text != b.Text) a.Text = b.Text;
-                a.FontSize=b.FontSize;a.FontWeight=b.FontWeight;a.Foreground=b.Foreground;
+                var selectedStart=a.SelectionStart;
+                var selectedEnd=a.SelectionEnd;
+                var sameText=a.Text==b.Text;
+                if (!sameText) a.Text = b.Text;
+                if(a.FontSize!=b.FontSize)a.FontSize=b.FontSize;
+                if(a.FontWeight!=b.FontWeight)a.FontWeight=b.FontWeight;
+                if(!Equals(a.Foreground,b.Foreground))a.Foreground=b.Foreground;
+                if(sameText && selectedStart!=selectedEnd && (a.SelectionStart!=selectedStart || a.SelectionEnd!=selectedEnd))
+                {a.SelectionStart=selectedStart;a.SelectionEnd=selectedEnd;}
                 return a;
             case (TextBlock a, TextBlock b):
                 if (a.Text != b.Text) a.Text = b.Text;
@@ -50,6 +58,8 @@ public static class InspectorPresentation
                 // Keys include the event identity for links: never retain a handler for another event.
                 if (a.Content is Panel buttonPanel && b.Content is Panel newButtonPanel) Update(buttonPanel, newButtonPanel);
                 else if (a.Content is TextBlock at && b.Content is TextBlock bt) at.Text = bt.Text;
+                return a;
+            case (Viewbox a, Viewbox) when Key(a) is "cue-sheet-icon":
                 return a;
             case (Border a, Border):
                 return a;

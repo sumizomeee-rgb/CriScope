@@ -67,6 +67,8 @@ public sealed partial class Collector
                 sessions[s.Id] = s; return s;
             }
             native = Channel("native", "CRI Monitor"); sdk = Channel("sdk", "cri-sdk");
+            native.StartAutomaticRecording(RecordingsDirectory,RecordingOptions);
+            sdk.StartAutomaticRecording(RecordingsDirectory,RecordingOptions);
             native.SetCaptureState(false, false, "等待本进程原生通道"); sdk.SetCaptureState(true, true, "游戏扩展已接入");
             var mapper = new NativeEventMapper(native.Id);
             long sequence = 0; int nativeEpoch = 0; long nativeSequence = 0, sdkSequence = 0;
@@ -151,6 +153,7 @@ public sealed partial class Collector
         finally
         {
             native?.SetCaptureState(false, false, ending); sdk?.SetCaptureState(false, false, ending);
+            native?.StopRecording(); sdk?.StopRecording();
             if (bridgeClients.TryGetValue(identity, out var current) && ReferenceEquals(current, client)) bridgeClients.TryRemove(identity, out _);
         }
     }

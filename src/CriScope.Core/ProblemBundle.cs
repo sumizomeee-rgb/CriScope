@@ -32,14 +32,22 @@ public static class ProblemBundle
             string name = $"{channelName}-{fileId}.criscope";
             using (var writer = Writer(archive, name))
             {
-                writer.WriteLine(source.RecordingHeader("Problem bundle; baseline is explicitly marked; independent source clock").ToJson());
-                foreach (var ev in context.Concat(interval).OrderBy(e => e.seq)) writer.WriteLine(ev.ToJson());
+                string busPolicy = source.BusSamplesAreEventTriggered
+                    ? "; busPolicy=event-triggered-500ms; disk Bus snapshots are sparse; available live tail may be denser"
+                    : "";
+                writer.WriteLine(source.RecordingHeader("Problem bundle; baseline is explicitly marked; independent source clock" + busPolicy).ToJson());
+                long bundleOrdinal = 0;
+                foreach (var ev in context.Concat(interval).OrderBy(e => e.seq))
+                    writer.WriteLine(ev.CloneForRecording(ev.baseline ? 0 : ++bundleOrdinal).ToJson());
             }
             bool lost = all.Any(e => e.kind == "gap" && e.time <= end) || evidence.HasUnrecordedGap && end>evidence.RecordedThroughTime;
             bool availableFromStart = evidence.FromRecording && all.Any(e => e.baseline) && all.Where(e=>!e.baseline).FirstOrDefault()?.time <= start ||
                 !evidence.FromRecording && source.Evicted == 0 && start >= (all.FirstOrDefault()?.time ?? 0);
             manifest.Add(new { file = name, session = source.Id, source = source.Source, source.ClientId, source.CaptureId,
                 source.Channel, source.Pid, source.Machine, from = start, to = end, selectedChannel = primary,
+                busRecordingPolicy = source.BusSamplesAreEventTriggered
+                    ? "disk: first Bus sample per Bus after discrete playback/control events; live tail may be denser"
+                    : null,
                 clock = "source-native; companion time range is not synchronized", evidence = evidence.FromRecording ? "frozen-recorded-prefix-and-available-memory-window" : "available-memory-window",
                 evidence.HasUnrecordedGap, evidence.RecordedThroughSequence, evidence.RecordedThroughTime,
                 contextAfterSequence=evidence.ContextAfterSequence,
@@ -53,7 +61,7 @@ public static class ProblemBundle
             requestedRange = new { session = selected.Id, from, to }, sources = manifest
         }, new JsonSerializerOptions { WriteIndented = true }));
         using (var output = archive.CreateEntry("screenshot.png").Open()) output.Write(screenshot);
-        using (var writer = Writer(archive, "README.txt")) writer.Write("CriScope 问题包\n在软件中使用“打开日志”查看各 .criscope 文件。\nmanifest.json 标注来源、独立时钟、实际可用范围与缺失。\nscreenshot.png 是导出时界面，不冒充历史截图。\n记录不包含声音。\n");
+        using (var writer = Writer(archive, "README.txt")) writer.Write("CriScope 问题包\n在软件中使用“导入日志…”查看各 .criscope 文件。\nmanifest.json 标注来源、独立时钟、实际可用范围与缺失。\nscreenshot.png 是导出时界面，不冒充历史截图。\n记录不包含声音。\n");
         return path;
     }
 

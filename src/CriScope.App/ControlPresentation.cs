@@ -6,6 +6,8 @@ namespace CriScope.App;
 public sealed record ControlRow(string Key, string Kind, string Name, string TargetLabel, WireEvent[] Records)
 {
     public WireEvent Latest => Records[^1];
+    public PlaybackGroup[] SettingOwners { get; init; } = [];
+    public string EmptyRelationshipLabel { get; init; } = "写入时未确认播放实例";
 }
 
 public sealed record ControlGroup(string Key, string Name, string Summary, ControlRow[] Rows);
@@ -40,10 +42,13 @@ public static class ControlPresentation
         "beat" => "BeatSync", "sequence" => "Sequence", _ => kind
     };
 
-    public static ControlGroup[] Group(IEnumerable<WireEvent> events, double end, ISet<string>? enabledKinds = null, ControlIdentityLabels? labels = null)
+    public static ControlGroup[] Group(IEnumerable<WireEvent> events, double end, ISet<string>? enabledKinds = null, ControlIdentityLabels? labels = null,
+        IEnumerable<WireEvent>? associationEvents = null,
+        Func<WireEvent, (PlaybackGroup[] Owners, string EmptyLabel)>? resolveSetting = null)
     {
         labels ??= new ControlIdentityLabels();
         var all = events.Where(e => e.time <= end).ToArray();
+        var relationEvidence = associationEvents?.ToArray() ?? all;
         var source = all.Where(e => Kinds.Contains(e.kind)).OrderBy(e => e.time).ThenBy(e => e.seq).ToArray();
         var targets = source.Where(e => e.kind is "aisac" or "selector" || e.kind == "block" && e.entity == "control")
             .Select(e => (e.session, e.objectId)).Distinct().ToDictionary(k => k, k => TargetLabel(k.session, k.objectId, labels));
@@ -52,11 +57,26 @@ public static class ControlPresentation
             .Concat(all.Where(e => e.kind == "request" && e.entity == "cue").Select(e => (e.session, e.parentId))).ToHashSet();
         var result = new List<ControlGroup>();
         var selected = source.Where(e => enabledKinds == null || enabledKinds.Contains(e.kind)).ToArray();
+        var ownerGroups = new Dictionary<string, PlaybackGroup[]>();
+        PlaybackGroup[] SettingOwners(WireEvent setting)
+        {
+            if (!ownerGroups.TryGetValue(setting.session, out var groups))
+                ownerGroups[setting.session] = groups = PlaybackPresentation.Group(
+                    relationEvidence.Where(e => e.session == setting.session), end);
+            return AssociationPresentation.PlayerPlaybacksAtSetting(groups, setting);
+        }
         foreach (var parameter in selected.Where(e => e.kind is "aisac" or "selector").GroupBy(e => (e.kind, e.name)).OrderBy(g => Array.IndexOf(Kinds, g.Key.kind)).ThenBy(g => g.Key.name))
         {
-            var rows = parameter.GroupBy(e => (e.session, e.objectId)).Select(g => new ControlRow(
-                Key("setting", g.Key.session, g.Key.objectId, parameter.Key.kind, parameter.Key.name), parameter.Key.kind,
-                targets[g.Key], string.Join(" · ", playbacks.Values.Where(p => p.PlayerId == g.Key.objectId && AssociationPresentation.ActiveAt(p, end)).Select(p => p.Name + " [" + labels.Get("播放", p.Id) + "]")), g.ToArray())).ToArray();
+            var rows = parameter.GroupBy(e => (e.session, e.objectId)).Select(g =>
+            {
+                var records = g.ToArray();
+                var relation = resolveSetting?.Invoke(records[^1]) ?? (SettingOwners(records[^1]), "写入时未确认播放实例");
+                var owners = relation.Item1;
+                return new ControlRow(Key("setting", g.Key.session, g.Key.objectId, parameter.Key.kind, parameter.Key.name),
+                    parameter.Key.kind, targets[g.Key],
+                    string.Join(" · ", owners.Select(p => p.Name + " [" + labels.Get("播放", p.Id) + "]")), records)
+                    { SettingOwners = owners, EmptyRelationshipLabel = relation.Item2 };
+            }).ToArray();
             var counts = rows.GroupBy(r => r.Name.Split(" #")[0]).Select(g => g.Key == "对象未提供" ? g.Key : $"{g.Count()} 个 {g.Key}");
             result.Add(new ControlGroup(Key("parameter", parameter.Key.kind, parameter.Key.name), parameter.Key.name,
                 KindLabel(parameter.Key.kind) + " · " + string.Join("、", counts) + $" · {parameter.Count()} 次设置", rows));

@@ -59,4 +59,156 @@ Check(One(nativeRequest,nativeVoice,sdkGap).StatusLabel=="播放中", "SDK缺口
 var sdkEarlyGap=E("gap","","",0.9);sdkEarlyGap.session="sdk";sdkEarlyGap.channel="sdk";
 Check(PlaybackPresentation.ControlsFor(One(nativeRequest,nativeVoice),[a0,sdkEarlyGap],20).BeforeStart.Contains(a0), "SDK缺口不清除原生Player历史设置");
 Check(One(release).StatusLabel.Contains("记录不完整"), "只有Cue结束时不宣称从未分配Voice");
+
+WireEvent History(string kind, string entity, string id, long seq, string parent = "", string name = "Cue") =>
+    new() { kind = kind, entity = entity, objectId = id, parentId = parent, seq = seq,
+        time = seq, session = "history", channel = "native", epoch = 1, name = name };
+var historyIndex = new CaptureRelationshipIndex();
+var hRequest = History("request", "cue", "playback:1", 1, "player:1", "Cue A");
+var hVoice = History("play", "voice", "voice:1", 2, "playback:1");
+var hSetting = History("aisac", "control", "player:1", 3, name: "MuteSFX");
+historyIndex.Observe(hRequest); historyIndex.Observe(hVoice); historyIndex.Observe(hSetting);
+Check(historyIndex.TryGet(hSetting, out var frozen) &&
+    frozen.Status == RelationshipEvidenceStatus.Observed &&
+    frozen.Events.Any(e => e.seq == hRequest.seq) && frozen.Events.Any(e => e.seq == hVoice.seq) &&
+    frozen.RecentCue?.seq == hRequest.seq, "写入时冻结播放实例、Voice 和最近 Cue 原始证据");
+var hEnd = History("log", "cue", "playback:1", 4); hEnd.lifecycle = "released";
+var hAfterEnd = History("aisac", "control", "player:1", 5, name: "MuteSFX");
+historyIndex.Observe(hEnd); historyIndex.Observe(hAfterEnd);
+Check(historyIndex.TryGet(hAfterEnd, out var endedSetting) &&
+    endedSetting.Status == RelationshipEvidenceStatus.ObservedNoOpenPlayback &&
+    endedSetting.Events.Length == 0 && endedSetting.RecentCue?.seq == hRequest.seq,
+    "已结束 Cue 只作为此前最近播放线索，不冒充写入时实例");
+var hGap = History("gap", "", "", 6);
+var hAfterGap = History("aisac", "control", "player:1", 7, name: "MuteSFX");
+historyIndex.Observe(hGap); historyIndex.Observe(hAfterGap);
+Check(historyIndex.TryGet(hAfterGap, out var uncertainSetting) &&
+    uncertainSetting.Status == RelationshipEvidenceStatus.Partial && uncertainSetting.RecentCue == null,
+    "缺口后不跨越断点借用旧 Player 的 Cue");
+var hNewRequest = History("request", "cue", "playback:2", 8, "player:1", "Cue B");
+var hConcurrent = History("request", "cue", "playback:3", 9, "player:1", "Cue C");
+var hConcurrentSetting = History("aisac", "control", "player:1", 10, name: "MuteSFX");
+historyIndex.Observe(hNewRequest); historyIndex.Observe(hConcurrent); historyIndex.Observe(hConcurrentSetting);
+Check(historyIndex.TryGet(hConcurrentSetting, out var concurrentSetting) &&
+    concurrentSetting.Events.Count(e => e.kind == "request") == 2 &&
+    concurrentSetting.Status == RelationshipEvidenceStatus.Partial &&
+    concurrentSetting.RecentCue?.name == "Cue C", "并发实例分别归属同 Player，最近 Cue 单独标注");
+var hDestroy = History("log", "", "player:1", 11, name: "ExPlayer_Destroy");
+var hReused = History("aisac", "control", "player:1", 12, name: "MuteSFX");
+historyIndex.Observe(hDestroy); historyIndex.Observe(hReused);
+Check(historyIndex.TryGet(hReused, out var reusedSetting) && reusedSetting.Events.Length == 0 &&
+    reusedSetting.RecentCue == null, "Player 句柄销毁后不继承旧实例和最近 Cue");
+var hAfterReuseRequest = History("request", "cue", "playback:4", 13, "player:1", "Cue D");
+var hCreateSuccess = History("log", "", "player:1", 14, name: "ExPlayer_Create_Success");
+var hAfterCreate = History("aisac", "control", "player:1", 15, name: "MuteSFX");
+historyIndex.Observe(hAfterReuseRequest); historyIndex.Observe(hCreateSuccess); historyIndex.Observe(hAfterCreate);
+Check(historyIndex.TryGet(hAfterCreate, out var newGeneration) && newGeneration.Events.Length == 0 &&
+    newGeneration.RecentCue == null, "Player 重建成功事件切断旧句柄关联");
+var nextEpochSetting = History("aisac", "control", "player:1", 16, name: "MuteSFX");
+nextEpochSetting.epoch = 2;
+Check(AssociationPresentation.PlayerPlaybacksAtSetting([hAfterReuseRequest, nextEpochSetting], nextEpochSetting).Length == 0,
+    "即使缺少显式边界，也不把旧 epoch 的 Playback 归给新 epoch 的同名 Player");
+
+using (var liveSession = new Session(new WireEvent { kind = "hello", value = 1, session = "history", name = "test" }))
+{
+    var sessionEnd = WireEvent.Parse(hEnd.ToJson()); sessionEnd.time = 3.1;
+    liveSession.Accept(hRequest); liveSession.Accept(hVoice); liveSession.Accept(hSetting); liveSession.Accept(sessionEnd);
+    var muchLater = History("metric", "resource", "cpu", 5); muchLater.time = 124;
+    liveSession.Accept(muchLater);
+    var retained = liveSession.ViewSnapshot();
+    var resolvedAtWrite = AssociationPresentation.ResolveAvailable(liveSession, hSetting, retained);
+    Check(retained.Any(e => e.seq == hSetting.seq) && !retained.Any(e => e.seq == hRequest.seq) &&
+        liveSession.TryGetSettingRelationship(hSetting, out var keptAtWrite) &&
+        keptAtWrite.Events.Any(e => e.seq == hRequest.seq) &&
+        resolvedAtWrite.Owners.Single().Request?.seq == hRequest.seq &&
+        resolvedAtWrite.Source == "capture-index",
+        "播放已结束且两分钟直播窗口逐出 Request 后，ResolveAvailable 仍恢复写入瞬间关联");
+}
+
+var historyDir = Path.Combine(Path.GetTempPath(), "CriScope-history-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(historyDir);
+var firstPart = Path.Combine(historyDir, "part1.criscope");
+var secondPart = Path.Combine(historyDir, "part2.criscope");
+var standalone = Path.Combine(historyDir, "standalone.criscope");
+var endedPart = Path.Combine(historyDir, "ended-part.criscope");
+var clueOnlyPart = Path.Combine(historyDir, "clue-only.criscope");
+var reconnectPart = Path.Combine(historyDir, "reconnect.criscope");
+var firstConnectionFile = Path.Combine(historyDir, "first-connection.criscope");
+var hHello = new WireEvent { kind = "hello", value = 1, session = "history", name = "test" };
+try
+{
+    var other = History("metric", "resource", "cpu", 2);
+    var diskSetting = History("aisac", "control", "player:1", 3, name: "MuteSFX");
+    var diskEnd = History("log", "cue", "playback:1", 4); diskEnd.lifecycle = "released";
+    var diskAfterEnd = History("aisac", "control", "player:1", 5, name: "MuteSFX");
+    var duplicate = WireEvent.Parse(hRequest.ToJson()); duplicate.name = "错误的基线名"; duplicate.baseline = true;
+    File.WriteAllText(firstPart, string.Join('\n', new[] { hHello, hRequest, other }.Select(e => e.ToJson())) + "\n");
+    File.WriteAllText(secondPart, string.Join('\n', new[] { hHello, duplicate, diskSetting, diskEnd, diskAfterEnd }.Select(e => e.ToJson())) + "\n" +
+        "{\"kind\":\"aisac\"", new System.Text.UTF8Encoding(false));
+    var diskEvents = RecordingEvidenceReader.ReadRange([firstPart, secondPart], 1, 5, "history").ToArray();
+    Check(diskEvents.Length == 5 && diskEvents[0].name == "Cue A" && diskEvents[^1].seq == 5,
+        "跨分段范围读取去重基线，忽略未换行尾字节，保留原始请求");
+    var recovered = HistoricalAssociation.Resolve([firstPart, secondPart], diskSetting);
+    Check(recovered.Events.Single(e => e.kind == "request").name == "Cue A" &&
+        recovered.Status == RelationshipEvidenceStatus.Observed && recovered.RecentCue?.seq == 1,
+        "从物理日志回推写入时关联实例，不依赖两分钟直播缓存");
+    var boundedSegments = new[] {
+        new RecordingSegmentInfo(firstPart, 1, 2, 0, false),
+        new RecordingSegmentInfo(secondPart, 3, 5, 1, false) };
+    var boundedRecovered = HistoricalAssociation.Resolve(boundedSegments, diskSetting);
+    Check(boundedRecovered.Status == RelationshipEvidenceStatus.Partial &&
+        boundedRecovered.Events.Any(e => e.kind == "request" && e.objectId == "playback:1"),
+        "按目标段元数据定位，只读轮转段的活动基线恢复实例");
+    var recoveredAfterEnd = HistoricalAssociation.Resolve([firstPart, secondPart], diskAfterEnd);
+    Check(recoveredAfterEnd.Status == RelationshipEvidenceStatus.ObservedNoOpenPlayback &&
+        recoveredAfterEnd.Events.Length == 0 && recoveredAfterEnd.RecentCue?.name == "Cue A",
+        "物理日志中已释放实例只作为历史 Cue 线索");
+
+    var shortEnd = WireEvent.Parse(hEnd.ToJson()); shortEnd.seq = 2; shortEnd.time = 2;
+    File.WriteAllText(endedPart, string.Join('\n', new[] { hHello, hRequest, shortEnd }.Select(e => e.ToJson())) + "\n");
+    var clueOnlySetting = History("aisac", "control", "player:1", 3, name: "MuteSFX");
+    File.WriteAllText(clueOnlyPart, string.Join('\n', new[] { hHello, clueOnlySetting }.Select(e => e.ToJson())) + "\n");
+    var priorEnded = HistoricalAssociation.Resolve(new[] {
+        new RecordingSegmentInfo(endedPart, 1, 2, 0, false),
+        new RecordingSegmentInfo(clueOnlyPart, 3, 3, 0, false) }, clueOnlySetting);
+    Check(priorEnded.Events.Length == 0 && priorEnded.RecentCue?.name == "Cue A" &&
+        priorEnded.Status == RelationshipEvidenceStatus.Partial,
+        "目标段无活动实例时，按需从前段补此前最近 Cue，仍不将其作为 Owner");
+
+    var reconnectionHeader = WireEvent.Parse(hHello.ToJson());
+    reconnectionHeader.detail = "connectionStart=true";
+    var firstConnectionSetting = History("aisac", "control", "player:1", 2, name: "MuteSFX");
+    File.WriteAllText(firstConnectionFile, string.Join('\n', new[] { reconnectionHeader, hRequest, firstConnectionSetting }
+        .Select(e => e.ToJson())) + "\n");
+    var firstConnectionEvidence = HistoricalAssociation.Resolve([firstConnectionFile], firstConnectionSetting);
+    Check(firstConnectionEvidence.Status == RelationshipEvidenceStatus.Observed &&
+        firstConnectionEvidence.Events.Single(e => e.kind == "request").seq == 1,
+        "首段从 seq1 完整采集时，连接文件头本身不伪造采集缺口");
+    File.WriteAllText(reconnectPart, string.Join('\n', new[] { reconnectionHeader, clueOnlySetting }.Select(e => e.ToJson())) + "\n");
+    var reconnectSegments = new[] {
+        new RecordingSegmentInfo(firstPart, 1, 2, 0, false, true),
+        new RecordingSegmentInfo(reconnectPart, 3, 3, 0, false, true) };
+    var afterReconnect = HistoricalAssociation.Resolve(reconnectSegments, clueOnlySetting);
+    var afterReconnectFull = HistoricalAssociation.Resolve([firstPart, reconnectPart], clueOnlySetting);
+    Check(afterReconnect.Events.Length == 0 && afterReconnect.RecentCue == null &&
+        afterReconnect.Status == RelationshipEvidenceStatus.Partial &&
+        afterReconnectFull.Events.Length == 0 && afterReconnectFull.RecentCue == null,
+        "重连边界阻止借用上一链接的活跃实例和此前 Cue，完整扫描亦同");
+
+    var sparseRequest = History("request", "cue", "playback:sparse", 10, "player:1", "Sparse Cue");
+    sparseRequest.baseline = true;
+    var sparseSetting = History("aisac", "control", "player:1", 101, name: "MuteSFX");
+    File.WriteAllText(standalone, string.Join('\n', new[] { hHello, sparseRequest, sparseSetting }.Select(e => e.ToJson())) + "\n");
+    var sparseRecovered = HistoricalAssociation.Resolve([standalone], sparseSetting);
+    Check(sparseRecovered.Status == RelationshipEvidenceStatus.Partial &&
+        sparseRecovered.Events.Single(e => e.kind == "request").name == "Sparse Cue" &&
+        sparseRecovered.Reason.Contains("分段基线", StringComparison.Ordinal),
+        "单独读取轮转段时保留稀疏基线播放证据，并标注前史不完整");
+}
+finally
+{
+    File.Delete(firstPart); File.Delete(secondPart); File.Delete(standalone);
+    File.Delete(endedPart); File.Delete(clueOnlyPart); File.Delete(reconnectPart);
+    File.Delete(firstConnectionFile); Directory.Delete(historyDir);
+}
 Console.WriteLine($"Playback presentation checks passed: {checks}");

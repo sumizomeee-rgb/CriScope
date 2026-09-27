@@ -3,7 +3,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using CriScope.Core;
 namespace CriScope.App;
-    internal enum IconKind { None, More, Sun, Moon, Locate, Timeline, Controls, Mixer, Space, Resources, Log, Back, Pause, Play, Live, Fit, Open, Export, Down, Details, CueSheet, Source, Listener, Stop, Selector, Block, Beat, Sequence }
+    internal enum IconKind { None, More, Sun, Moon, Locate, Timeline, Controls, Mixer, Space, Resources, Log, Back, Pause, Play, Live, Fit, Open, Export, Down, Details, CueSheet, Source, Listener, Stop, Selector, Block, Beat, Sequence, ClockTime, RelativeTime }
 
 internal enum SemanticColor { Text, Muted, Selected, Started, Ended, Warning, Aisac, Selector, Block, Beat, Sequence, Source, Listener }
 internal static class VisualLanguage
@@ -16,7 +16,9 @@ internal static class VisualLanguage
         IconKind.Selector=>"M4,5 H20 M4,12 H14 M4,19 H20 M17,9 L21,12 L17,15",
         IconKind.Block=>"M3,4 H10 V11 H3 Z M14,13 H21 V20 H14 Z M10,7 H17 V13",
         IconKind.Beat=>"M3,12 H7 L10,4 L14,20 L17,12 H21",
-        IconKind.Sequence=>"M3,5 H9 V10 H3 Z M15,14 H21 V19 H15 Z M9,7 H18 V14",
+        IconKind.Sequence=>"M3,12 H21 M17,8 L21,12 L17,16 M5,7 V17 M11,7 V17",
+        IconKind.ClockTime=>"M12,2 A10,10 0 1 1 11.99,2 M12,6 V12 L16,14",
+        IconKind.RelativeTime=>"M9,2 H15 M12,2 V5 M12,5 A8,8 0 1 1 11.99,5 M12,8 V12 L16,12",
         IconKind.Timeline=>"M3,5 V19 M7,8 H21 M7,12 H17 M7,16 H21",
         IconKind.Controls=>"M5,3 V21 M12,3 V21 M19,3 V21 M2,8 H8 M9,16 H15 M16,6 H22",
         IconKind.Mixer=>"M4,9 V18 M9,4 V20 M14,7 V17 M19,2 V22",

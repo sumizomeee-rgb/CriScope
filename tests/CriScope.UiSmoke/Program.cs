@@ -4,6 +4,7 @@ using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
 using Avalonia.Media.Imaging;
 using Avalonia.Themes.Fluent;
@@ -31,7 +32,8 @@ public sealed class SmokeApp : Application
             var a = CreateSession(1001, "Alpha"); var b = CreateSession(1002, "Beta");
             var sessions = (ConcurrentDictionary<string, Session>)typeof(Collector).GetField("sessions", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(collector)!;
             sessions[a.Id] = a; sessions[b.Id] = b;
-            var window = new MainWindow(collector); desktop.MainWindow = window;
+            var preferencesPath = Path.Combine(directory, "ui-preferences.json");
+            var window = new MainWindow(collector, preferencesPath); desktop.MainWindow = window;
             window.Opened += async (_, _) =>
             {
                 int passed = 0;
@@ -105,6 +107,43 @@ public sealed class SmokeApp : Application
                     Check(!Field<TimelineControl>("_timeline").ControlKinds.Contains("selector")&&!Field<TimelineControl>("_timeline").ShowSources,"控制快捷筛选与空间图层跨工作区保留");
                     window.ApplyUiAction("control-kind","selector:true"); window.ApplyUiAction("spatial-layer","sources:true");
                     Check(TimelineControl.TimeLabel(3661.25)=="01:01:01.250","长时采集使用时分秒而不是累计分钟");
+                    window.ApplyUiAction("workspace","控制");
+                    await Task.Delay(150);
+                    var axisTimeline=Field<TimelineControl>("_timeline");
+                    Check(axisTimeline.PreferWallTime&&axisTimeline.ShowingWallTime&&axisTimeline.ClockTimeAt?.Invoke(a.TimeOrigin) is {} clockPoint&&axisTimeline.DisplayStamp(a.TimeOrigin).Contains(clockPoint.ToLocalTime().ToString("HH:mm:ss")),"有接收锚点时默认展示真实钟表时间");
+                    ToggleButton AxisMode() => window.GetVisualDescendants().OfType<ToggleButton>().Single(button=>button.Name=="TimeAxisToggle");
+                    Check(AxisMode().IsChecked==true
+                        &&AxisMode().GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().Any()
+                        &&ToolTip.GetTip(AxisMode())?.ToString()?.StartsWith("当前：钟表时间")==true
+                        &&ToolTip.GetTip(AxisMode())?.ToString()?.Contains("相对时间")==true,
+                        "时间轴默认钟表时间，使用 SVG 图标切换并以提示说明另一模式");
+                    var axisPosition=AxisMode().TranslatePoint(new Point(0,0),window)!.Value;
+                    var filterPosition=Field<TextBox>("_filter").TranslatePoint(new Point(0,0),window)!.Value;
+                    var timelinePosition=axisTimeline.TranslatePoint(new Point(0,0),window)!.Value;
+                    var axisScreenshot=Path.GetFullPath(".local/ui-check/axis-mode-aligned.png");
+                    Directory.CreateDirectory(Path.GetDirectoryName(axisScreenshot)!);
+                    File.WriteAllBytes(axisScreenshot,window.CapturePng("window"));
+                    Check(axisPosition.Y-timelinePosition.Y>=2
+                        &&axisPosition.Y-timelinePosition.Y+AxisMode().Bounds.Height<=40
+                        &&AxisMode().Bounds.Width==AxisMode().Bounds.Height,
+                        $"时间轴切换图标位于刻度行且为正方形（轴 {axisPosition}，筛选 {filterPosition}，画布 {timelinePosition}，尺寸 {AxisMode().Bounds.Size}）");
+                    AxisMode().IsChecked=false;
+                    Check(!axisTimeline.ShowingWallTime&&axisTimeline.DisplayStamp(a.TimeOrigin)==axisTimeline.Stamp(a.TimeOrigin)
+                        &&Field<TextBlock>("_range").Text!.Contains("采集相对时间")
+                        &&ToolTip.GetTip(AxisMode())?.ToString()?.StartsWith("当前：相对时间")==true
+                        &&ToolTip.GetTip(AxisMode())?.ToString()?.Contains("钟表时间")==true,
+                        "时间轴切换到相对时间并更新图标提示");
+                    var storedType=typeof(MainWindow).Assembly.GetType("CriScope.App.TimeAxisPreferences")!;
+                    var stored=Activator.CreateInstance(storedType,[preferencesPath])!;
+                    Check(!((bool)storedType.GetMethod("LoadWallTime")!.Invoke(stored,null)!),"相对时间选择写入持久偏好，重启后可重新读取");
+                    window.ApplyUiAction("workspace","播放");axisTimeline=Field<TimelineControl>("_timeline");
+                    Check(!axisTimeline.PreferWallTime&&AxisMode().IsChecked==false,"时间轴显示偏好跨工作区保留");
+                    AxisMode().IsChecked=true;
+                    Check(axisTimeline.ShowingWallTime&&Field<TextBlock>("_range").Text!.Contains("钟表时间")
+                        &&ToolTip.GetTip(AxisMode())?.ToString()?.StartsWith("当前：钟表时间")==true,
+                        "时间轴可切回钟表时间并更新提示");
+                    var noClockAxis=new TimelineControl {TimeOrigin=10,End=20,ClockTimeAt=_=>null};
+                    Check(!noClockAxis.ShowingWallTime&&noClockAxis.DisplayStamp(20)==noClockAxis.Stamp(20),"没有钟表锚点时回退相对刻度");
                     var projectionNative=new[]{new WireEvent {kind="request",entity="cue",objectId="pb",time=100,observedTime=10,raw="{\"parameters\":[{\"name\":\"CriAtomExPlaybackId\",\"value\":12}]}"},new WireEvent {kind="metric",time=101,observedTime=11}};
                     var sdkBeat=new WireEvent {kind="beat",objectId="playback:12",time=10.5,observedTime=10.5,seq=7};
                     var projected=ClientTimelineProjection.Combine(projectionNative,[sdkBeat]).Single(e=>e.kind=="beat");
@@ -177,36 +216,37 @@ public sealed class SmokeApp : Application
                     bool wrongThreadRejected = await Task.Run(() => { try { window.UiState(); return false; } catch (InvalidOperationException) { return true; } });
                     Check(wrongThreadRejected, "UI 接口拒绝非 Dispatcher 线程");
 
-                    Click(Field<Button>("_record")); Check(a.Recording && !b.Recording, "录制只启动当前会话 A");
-                    a.Accept(Event(a, 3, "Alpha-recorded")); Select(b); Click(Field<Button>("_record"));
-                    Check(a.Recording && b.Recording, "会话 B 独立录制且 A 继续");
-                    b.Accept(Event(b, 2, "Beta-recorded")); Click(Field<Button>("_record"));
-                    Check(a.Recording && !b.Recording, "停止 B 不影响 A"); Select(a); Click(Field<Button>("_record"));
-                    Check(!a.Recording && File.Exists(a.RecordingPath), "停止 A 完成录制文件");
-                    Check(Field<StackPanel>("_savedPanel").IsVisible && Field<TextBlock>("_savedNotice").Text!.Contains(a.RecordingPath), "停止并保存明确显示日志路径");
+                    Check(!window.GetVisualDescendants().OfType<Button>().Any(button=>ToolTip.GetTip(button)?.ToString() is "开始录制" or "停止并保存"), "顶部不再提供手动录制开关");
+                    var logMenu=window.GetVisualDescendants().OfType<Button>().Single(button=>ToolTip.GetTip(button)?.ToString()=="更多操作");
+                    Check(((StackPanel)((Flyout)logMenu.Flyout!).Content!).Children.OfType<Button>().Any(button=>
+                        button.Content is StackPanel caption&&caption.Children.OfType<TextBlock>().Any(label=>label.Text=="导入日志…")
+                        &&ToolTip.GetTip(button)?.ToString()?.Contains("只读历史会话")==true), "更多操作以导入文案和说明呈现历史日志入口");
+                    Check(((StackPanel)((Flyout)logMenu.Flyout!).Content!).Children.OfType<Button>().Any(button=>ToolTip.GetTip(button)?.ToString()=="打开日志目录"), "更多操作保留自动日志目录入口");
+                    a.StartAutomaticRecording(directory);a.Accept(Event(a, 3, "Alpha-recorded"));Select(a);
+                    Check(a.Recording && !b.Recording && File.Exists(a.RecordingPath) && Field<StackPanel>("_savedPanel").IsVisible
+                        && Field<TextBlock>("_savedNotice").Text!.Contains(a.RecordingPath), "自动日志写入时显示所选会话文件路径");
+                    a.StopRecording();
+                    Check(!a.Recording && File.Exists(a.RecordingPath), "结束后保留可回放的自动日志");
                     var pairNative=Meta(clientId,"native","take-1"); var pairSdk=Meta(clientId,"sdk","take-1");
                     var olderSdk=Meta(clientId,"sdk","take-0");
                     sessions[pairNative.Id]=pairNative; sessions[pairSdk.Id]=pairSdk; sessions[olderSdk.Id]=olderSdk;
-                    Select(pairNative); Click(Field<Button>("_record"));
-                    Check(pairNative.Recording && pairSdk.Recording && !olderSdk.Recording, "一次开始同时录制本次采集双通道，不跨 CaptureId");
-                    var late=Meta(clientId,"sdk","take-1"); sessions[late.Id]=late; await Task.Delay(650);
-                    Check(late.Recording, "同次采集稍晚接入的通道自动加入日志记录");
-                    Select(pairSdk); Check(State().GetProperty("recording").GetBoolean(), "切换同卡通道保留整体录制状态");
-                    Click(Field<Button>("_record"));
-                    Check(!pairNative.Recording && !pairSdk.Recording && !late.Recording && new[]{pairNative.RecordingPath,pairSdk.RecordingPath,late.RecordingPath}.Distinct().Count()==3 && File.Exists(pairNative.RecordingPath) && File.Exists(pairSdk.RecordingPath), "任一通道停止全部，同次采集保留独立日志文件");
-                    Check(Field<TextBlock>("_savedNotice").Text!.Contains("3 个通道日志"), "多通道保存反馈明确文件数");
-                    Click(Field<Button>("_record"));
-                    Connected(pairNative,false); await Task.Delay(350);
-                    Check(pairNative.Recording && pairSdk.Recording, "单个通道断开时仍保留本次采集记录");
-                    Connected(pairSdk,false); Connected(late,false); await Task.Delay(650);
+                    pairNative.StartAutomaticRecording(directory);pairSdk.StartAutomaticRecording(directory);
+                    Select(pairNative);
+                    Check(pairNative.Recording && pairSdk.Recording && !olderSdk.Recording, "同次采集的原生与 SDK 通道各有独立自动日志");
+                    var late=Meta(clientId,"sdk","take-1"); sessions[late.Id]=late;late.StartAutomaticRecording(directory);await Task.Delay(650);
+                    Select(pairSdk); Check(State().GetProperty("recording").GetBoolean(), "切换同卡通道保留整体自动记录状态");
+                    Check(Field<TextBlock>("_savedNotice").Text!.Contains("3 个通道"), "同卡多通道日志路径反馈包含通道数");
+                    Connected(pairNative,false);pairNative.StopRecording();await Task.Delay(350);
+                    Check(!pairNative.Recording && pairSdk.Recording, "单个通道结束后其余通道仍在记录");
+                    Connected(pairSdk,false);Connected(late,false);pairSdk.StopRecording();late.StopRecording();await Task.Delay(650);
                     var disconnectedPaths = new[]{pairNative.RecordingPath,pairSdk.RecordingPath,late.RecordingPath};
-                    Check(!pairNative.Recording && !pairSdk.Recording && !late.Recording && !State().GetProperty("recording").GetBoolean() && Field<StackPanel>("_savedPanel").IsVisible, "全部通道断开自动保存并退出录制状态");
+                    Check(!pairNative.Recording && !pairSdk.Recording && !late.Recording && !State().GetProperty("recording").GetBoolean(), "全部通道断开后退出自动记录状态");
                     foreach(var path in disconnectedPaths) { using var exclusive=File.Open(path,FileMode.Open,FileAccess.ReadWrite,FileShare.None); }
                     Check(disconnectedPaths.All(File.Exists), "断开自动收尾后独立日志已释放文件句柄");
                     var reconnected=Meta(clientId,"native","take-2"); sessions[reconnected.Id]=reconnected;
                     var lateDisconnected=Meta(clientId,"sdk","take-1"); Connected(lateDisconnected,false); sessions[lateDisconnected.Id]=lateDisconnected;
                     await Task.Delay(650);
-                    Check(!reconnected.Recording && !lateDisconnected.Recording && !pairNative.Recording && pairNative.RecordingPath==disconnectedPaths[0], "重连的新采集与旧断开通道不自动重开已结束日志");
+                    Check(!reconnected.Recording && !lateDisconnected.Recording && !pairNative.Recording && pairNative.RecordingPath==disconnectedPaths[0], "UI 夹具中重连的新采集不误继承旧日志");
                     Select(a);
                     window.ApplyUiAction("range", "1:3");
                     Check(window.CurrentTimeRange()==(1d,3d), "问题包导出获取当前时间范围");
@@ -221,8 +261,9 @@ public sealed class SmokeApp : Application
                     Check(problemDescription=="测试问题描述"&&desktop.Windows.Count==1,"导出问题包对话框传递描述且关闭对话框");
                     typeof(MainWindow).GetMethod("Load", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [a.RecordingPath]);
                     await Task.Delay(200);
-                    Check(Field<Session>("_session").IsReplay && Field<WireEvent[]>("_snapshot").Any(e => e.name == "Alpha-recorded") && !Field<Button>("_record").IsEnabled,
-                        "真实录制重新打开且回放禁止重复录制");
+                    Check(Field<Session>("_session").IsReplay && Field<WireEvent[]>("_snapshot").Any(e => e.name == "Alpha-recorded")
+                        && !window.GetVisualDescendants().OfType<Button>().Any(button=>ToolTip.GetTip(button)?.ToString()=="开始录制"),
+                        "自动日志重新打开后保持只读回放");
                     var followClient=Guid.NewGuid().ToString("N");
                     var oldCapture=Meta(followClient,"sdk","old"); sessions[oldCapture.Id]=oldCapture;
                     Select(oldCapture); window.ApplyUiAction("range","0:5"); Connected(oldCapture,false);
@@ -288,12 +329,31 @@ public sealed class SmokeApp : Application
                     inspectSession.Accept(inspectRequest);
                     inspectSession.Accept(new WireEvent {session=inspectSession.Id,seq=2,kind="play",entity="voice",objectId="inspect-v",parentId="inspect-pb",time=200.02});
                     inspectSession.Accept(new WireEvent {session=inspectSession.Id,seq=3,kind="stop",entity="voice",objectId="inspect-v",parentId="inspect-pb",time=200.5});
+                    inspectSession.Accept(new WireEvent {session=inspectSession.Id,seq=4,kind="stop",entity="cue",objectId="inspect-pb",time=200.51,endReason="natural"});
                     Select(inspectSession);window.ApplyUiAction("range","199:205");
                     typeof(MainWindow).GetMethod("SelectEvent",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,[inspectRequest]);
+                    var detailKind=Field<Border>("_inspector").GetVisualDescendants().OfType<SelectableTextBlock>().Single(x=>x.Tag?.ToString()=="inspector-kind");
+                    var detailName=Field<Border>("_inspector").GetVisualDescendants().OfType<SelectableTextBlock>().Single(x=>x.Tag?.ToString()=="inspector-name");
+                    Check(detailKind.Text=="Silent Cue"&&detailName.Text=="播放实例"&&detailKind.ContextMenu!=null
+                        &&detailKind.FontSize==16&&detailName.FontSize==11
+                        &&!Field<Border>("_inspector").GetVisualDescendants().OfType<TextBlock>().Any(x=>x.Text=="事件详情"),
+                        "可复制事件名为抽屉主标题，类型作为次级说明，不重复通用标题");
+                    await Task.Delay(220);
+                    var kindOrigin=detailKind.TranslatePoint(new Point(),window)!.Value;
+                    var nameOrigin=detailName.TranslatePoint(new Point(),window)!.Value;
+                    var bodyOrigin=Field<StackPanel>("_details").TranslatePoint(new Point(),window)!.Value;
+                    Check(Math.Abs(kindOrigin.X-nameOrigin.X)<2&&Math.Abs(nameOrigin.X-bodyOrigin.X)<2&&nameOrigin.Y>kindOrigin.Y,
+                        "抽屉名称、类型和正文共用左边界，类型位于第二行");
+                    var endedFacts=Field<StackPanel>("_details").Children.ToList();
+                    var endedTimeSection=endedFacts.FindIndex(x=>x.Tag?.ToString()=="section:playback-time");
+                    var endedReason=endedFacts.FindIndex(x=>x.Tag?.ToString()=="row:结束原因");
+                    var endedDuration=endedFacts.FindIndex(x=>x.Tag?.ToString()=="row:播放历时");
+                    Check(endedTimeSection>=0&&endedDuration>endedTimeSection&&endedReason>endedDuration,"结束原因跟随播放时间数据");
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/ended-detail.png"),window.CapturePng("window"));
                     window.ApplyUiAction("workspace","控制");
                     Check(Field<StackPanel>("_details").GetVisualDescendants().OfType<TextBlock>().Any(x=>x.Text is "播放历时" or "已播放" or "本次观测"),"暂停历史切页后详情仍使用恢复的时间范围，保留播放起止");
                     window.ApplyUiAction("live","true");
-                    inspectSession.Accept(new WireEvent {session=inspectSession.Id,seq=4,kind="metric",time=210,name="CPU",value=1});
+                    inspectSession.Accept(new WireEvent {session=inspectSession.Id,seq=5,kind="metric",time=210,name="CPU",value=1});
                     await Task.Delay(400);
                     Check((double)typeof(MainWindow).GetField("_lastInspectorEnd",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(window)!>=210,"首次选择后详情会随最新观测刷新");
                     var retainedExpanders=Field<StackPanel>("_details").Children.OfType<Expander>().ToArray();
@@ -301,18 +361,43 @@ public sealed class SmokeApp : Application
                     await Task.Delay(150);
                     var drawerScroll=Field<Border>("_inspector").GetVisualDescendants().OfType<ScrollViewer>().First();
                     drawerScroll.Offset=new Vector(0,100);await Task.Delay(100);var drawerOffset=drawerScroll.Offset;
+                    var retainedName=Field<Border>("_inspector").GetVisualDescendants().OfType<SelectableTextBlock>().Single(x=>x.Tag?.ToString()=="inspector-kind");
+                    retainedName.SelectionStart=0;retainedName.SelectionEnd=6;
                     for(int n=0;n<30;n++)
                     {
-                        inspectSession.Accept(new WireEvent {session=inspectSession.Id,seq=5+n,kind="metric",time=211+n,name="CPU",value=1});
+                        inspectSession.Accept(new WireEvent {session=inspectSession.Id,seq=6+n,kind="metric",time=211+n,name="CPU",value=1});
                         window.ApplyUiAction("live","true");
                     }
                     await Task.Delay(150);
                     Check(retainedExpanders.All(x=>x.IsExpanded&&Field<StackPanel>("_details").Children.Contains(x)),"连续30次刷新不重建或关闭抽屉折叠项");
                     Check(drawerScroll.Offset==drawerOffset&&ReferenceEquals(Field<WireEvent>("_selected"),inspectRequest),"实时刷新保留抽屉滚动和选中事件");
+                    var refreshedName=Field<Border>("_inspector").GetVisualDescendants().OfType<SelectableTextBlock>().Single(x=>x.Tag?.ToString()=="inspector-kind");
+                    Check(ReferenceEquals(retainedName,refreshedName)&&retainedName.SelectedText=="Silent",
+                        $"实时刷新保留顶栏名称选区（同一控件={ReferenceEquals(retainedName,refreshedName)}；当前选区={retainedName.SelectedText}）");
+                    typeof(MainWindow).GetMethod("SelectEvent",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,[inspectSession.ViewSnapshot().First(x=>x.seq==2)]);
+                    Check(Field<Border>("_inspector").GetVisualDescendants().OfType<SelectableTextBlock>().Single(x=>x.Tag?.ToString()=="inspector-kind").Text=="Silent Cue",
+                        "声部事件没有名称时从同一播放实例显示已记录的 Cue 名");
+                    Check(drawerScroll.Offset.Y==0,"切换事件后抽屉回到标题位置");
+                    var selectedRows=Field<StackPanel>("_details").Children.ToList();
+                    Check(selectedRows.FindIndex(x=>x.Tag?.ToString()=="row:发生时间")>=0&&selectedRows.FindIndex(x=>x.Tag?.ToString()=="row:发生时间")<selectedRows.FindIndex(x=>x.Tag?.ToString()=="row:状态"),"所选事件的发生时间保持在播放概况之前");
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v041-drawer-retained.png"),window.CapturePng("window"));
                     var closeDrawer=Field<Border>("_inspector").GetVisualDescendants().OfType<Button>().Single(x=>ToolTip.GetTip(x)?.ToString()=="关闭详情");
                     Click(closeDrawer);
                     Check(!State().GetProperty("inspector").GetBoolean()&&State().GetProperty("live").GetBoolean(),"抽屉自身关闭按钮生效且不停止实时跟随");
+                    var detailToggle=Field<Button>("_detailsToggle");
+                    Click(detailToggle);Click(detailToggle);Click(detailToggle);
+                    await Task.Delay(240);
+                    Check(State().GetProperty("inspector").GetBoolean()&&Field<Border>("_inspector") is {IsEnabled:true} openedDrawer&&openedDrawer.Bounds.Width>=371,
+                        "快速反复切换后宽屏详情抽屉完整展开");
+                    var wideWidth=window.Width;window.Width=1000;await Task.Delay(260);
+                    Check(Field<Border>("_inspector").Bounds.Width is >=343 and <=345
+                        && Field<Grid>("_body").ColumnDefinitions[0].ActualWidth<1,
+                        "窄窗抽屉保持可读宽度并收起侧栏");
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/drawer-narrow.png"),window.CapturePng("window"));
+                    window.Width=wideWidth;await Task.Delay(260);
+                    Click(detailToggle);await Task.Delay(240);
+                    Check(!State().GetProperty("inspector").GetBoolean()&&Field<Border>("_inspector") is {IsEnabled:false} hiddenDrawer&&hiddenDrawer.Bounds.Width<=1,
+                        "详情抽屉收起后不残留可交互区域");
                     Check(window.GetVisualDescendants().OfType<Button>().Any(x=>x.Content is StackPanel sp&&sp.Children.OfType<TextBlock>().Any(b=>b.Text=="全览")),"缩放按钮恢复全览短文案");
                     var controlsFixture=new[] {
                         new WireEvent {kind="aisac",session="n",seq=1,time=1,objectId="p1",name="Attack",value=0},
@@ -337,6 +422,26 @@ public sealed class SmokeApp : Application
                     Check(grouped.Single(g=>g.Name=="未关联播放实例").Rows.Single().Latest.name=="Unlinked","无明确Playback关联的回调保持未关联");
                     Check(grouped.Single(g=>g.Name.Contains("Block 请求")).Rows.Single().Latest.value==2&&grouped.First(g=>g.Name.StartsWith("Same Cue")).Rows.Single(r=>r.Kind=="block").Latest.value==1,"Player的Block请求与Playback位置采样分开展示");
                     Check(grouped.Single(g=>g.Name=="CategoryVolume").Rows.Single().Name.StartsWith("Category #"),"原生Category作用域不冒充Player");
+                    var atWrite=new WireEvent[] {
+                        new() {kind="request",entity="cue",session="n",seq=1,time=1,objectId="pb-a",parentId="player",name="Cue A"},
+                        new() {kind="aisac",session="n",seq=2,time=2,objectId="player",name="Volume",value=.2},
+                        new() {kind="request",entity="cue",session="n",seq=3,time=3,objectId="pb-b",parentId="player",name="Cue B"},
+                        new() {kind="aisac",session="n",seq=4,time=3,objectId="player",name="Volume",value=.4},
+                        new() {kind="stop",entity="cue",session="n",seq=5,time=3,objectId="pb-a"},
+                        new() {kind="aisac",session="n",seq=6,time=3,objectId="player",name="Volume",value=.6},
+                        new() {kind="request",entity="cue",session="n",seq=7,time=3,objectId="pb-c",parentId="player",name="Cue C"},
+                        new() {kind="aisac",session="n",seq=8,time=4,objectId="category:8",name="CategoryVolume",value=.8},
+                        new() {kind="request",entity="cue",session="other",seq=1,time=1,objectId="pb-other",parentId="player",name="Other session"}};
+                    Check(AssociationPresentation.PlayerPlaybacksAtSetting(atWrite,atWrite[1]).Select(p=>p.Name).SequenceEqual(["Cue A"]),"AISAC 写入时刻不显示后来启动的 Cue");
+                    Check(AssociationPresentation.PlayerPlaybacksAtSetting(atWrite,atWrite[3]).Select(p=>p.Name).SequenceEqual(["Cue B","Cue A"]),"同 Player 并发时最新实例排前且保留全部");
+                    Check(AssociationPresentation.PlayerPlaybacksAtSetting(atWrite,atWrite[5]).Select(p=>p.Name).SequenceEqual(["Cue B"]),"同时间戳先结束与后启动按事件序号区分");
+                    Check(AssociationPresentation.PlayerPlaybacksAtSetting(atWrite,atWrite[7]).Length==0,"Category AISAC 不伪装成 Player 播放关联");
+                    var filteredSetting=ControlPresentation.Group(atWrite.Where(e=>e.kind=="aisac"),5,associationEvents:atWrite).Single(g=>g.Name=="Volume").Rows.Single();
+                    Check(filteredSetting.SettingOwners.Select(p=>p.Name).SequenceEqual(["Cue B"]),"筛选掉播放事件后 AISAC 仍用完整证据计算写入时归属");
+                    var interrupted=new WireEvent[] {atWrite[0],new() {kind="gap",session="n",seq=2,time=1.5},new() {kind="aisac",session="n",seq=3,time=2,objectId="player",name="Volume"}};
+                    Check(AssociationPresentation.PlayerPlaybacksAtSetting(interrupted,interrupted[2]).Length==0,"证据缺口后不臆测 AISAC 写入时的 Cue");
+                    var laterGap=new WireEvent[] {atWrite[0],atWrite[1],new() {kind="gap",session="n",seq=3,time=2}};
+                    Check(AssociationPresentation.PlayerPlaybacksAtSetting(laterGap,atWrite[1]).Select(p=>p.Name).SequenceEqual(["Cue A"]),"同时间戳写入后的缺口不反向改写历史归属");
                     var retainedPlayer=attack.Rows[1].Name;
                     Check(ControlPresentation.Group(controlsFixture.Where(e=>e.objectId!="p1"),20,new HashSet<string>{"aisac"},controlLabels).Single(g=>g.Name=="Attack").Rows.Single().Name==retainedPlayer,"过滤和旧记录退出缓存不会重排Player编号");
                     Check(ControlPresentation.Value(controlsFixture[5])=="120 BPM · 小节 2 · 拍 3","Beat摘要展示BPM小节拍数而非SDK原始前缀");
@@ -350,6 +455,9 @@ public sealed class SmokeApp : Application
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v041-grouping.png"),window.CapturePng("window"));
                     typeof(MainWindow).GetMethod("SelectEvent",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,[controlsFixture[2]]);
                     Check(Field<StackPanel>("_details").Children.OfType<Expander>().Any(x=>x.Tag?.ToString()=="more-information"&&!x.IsExpanded),"控制次要记录归入统一更多信息");
+                    Check(Field<Border>("_inspector").GetVisualDescendants().OfType<SelectableTextBlock>().Single(x=>x.Tag?.ToString()=="inspector-kind").Text=="Attack"
+                        &&Field<Border>("_inspector").GetVisualDescendants().OfType<SelectableTextBlock>().Single(x=>x.Tag?.ToString()=="inspector-name").Text=="AISAC 设置",
+                        "AISAC 参数名称为主标题，类型在次级位置呈现");
                     await Task.Delay(150);
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v041-history.png"),window.CapturePng("window"));
                     var sharedSetting=new WireEvent {session=controlSession.Id,seq=14,kind="aisac",objectId="p1",name="Shared",time=14,value=1};controlSession.Accept(sharedSetting);
@@ -358,13 +466,35 @@ public sealed class SmokeApp : Application
                     typeof(MainWindow).GetMethod("Inspector",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,null);
                     var ownerButtons=Field<StackPanel>("_details").GetVisualDescendants().OfType<Button>().Where(x=>x.Tag?.ToString()?.StartsWith("owner:")==true).ToArray();
                     Check(ownerButtons.Length==2&&ownerButtons.Select(b=>b.Tag).Distinct().Count()==2,"同名Cue关联按钮按实例身份保留，不复用到另一次播放");
-                    Click(ownerButtons[1]);Check(Field<WireEvent>("_selected").objectId=="pb2","刷新后的同名关联链接仍指向正确实例");
+                    Check(ownerButtons.All(b=>b.ContextMenu!=null)&&Field<StackPanel>("_details").GetLogicalDescendants().OfType<Grid>().Where(g=>g.Tag?.ToString()?.StartsWith("owner:")==true).All(g=>g.Children.OfType<SelectableTextBlock>().Any()),"关联的 Cue 名、实例编号及导航入口均可复制");
+                    var sharedGroup=ControlPresentation.Group(groupedTimeline.Events,groupedTimeline.End,labels:groupedTimeline.ControlLabels).Single(g=>g.Name=="Shared");
+                    var expandedShared=(HashSet<string>)typeof(TimelineControl).GetField("_expanded",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(groupedTimeline)!;
+                    expandedShared.Add(sharedGroup.Key);expandedShared.Add("related:"+sharedGroup.Rows.Single().Key);
+                    groupedTimeline.InvalidateVisual();await Task.Delay(120);
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/control-related-cue.png"),window.CapturePng("workspace"));
+                    var relatedCards=(List<Rect>)typeof(TimelineControl).GetField("_relatedCueBounds",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(groupedTimeline)!;
+                    var controlHits=(List<(Rect rect,WireEvent item)>)typeof(TimelineControl).GetField("_hits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(groupedTimeline)!;
+                    var controlPoints=controlHits.Where(h=>h.item.kind=="aisac"&&h.rect.Width<=12).Select(h=>h.rect).ToArray();
+                    var controlChips=(List<(Rect rect,string key)>)typeof(TimelineControl).GetField("_toggleHits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(groupedTimeline)!;
+                    Check(relatedCards.Count>0&&controlPoints.Length>0&&relatedCards.All(card=>controlPoints.All(point=>!card.Intersects(point)))
+                        &&controlChips.Count>0&&relatedCards.All(card=>controlChips.All(chip=>!card.Intersects(chip.rect))),
+                        "AISAC 样本点、关联 Cue 卡片和顶部筛选项占据独立点击区域");
+                    var cueLinks=(List<(Rect Rect,WireEvent Event)>)typeof(TimelineControl).GetField("_links",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(groupedTimeline)!;
+                    var hoverLink=typeof(TimelineControl).GetMethod("UpdateLinkHover",BindingFlags.Instance|BindingFlags.NonPublic)!;
+                    Check(cueLinks.Count>0&&hoverLink.Invoke(groupedTimeline,[cueLinks[0].Rect.Center]) is WireEvent
+                        &&groupedTimeline.Cursor!=null&&typeof(TimelineControl).GetField("_hoverLinkRect",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(groupedTimeline) is Rect,
+                        "关联 Cue 跳转区域悬停时出现指针反馈");
+                    Check(hoverLink.Invoke(groupedTimeline,[new Point(0,0)])==null&&groupedTimeline.Cursor==null
+                        &&typeof(TimelineControl).GetField("_hoverLinkRect",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(groupedTimeline)==null,
+                        "鼠标移出跳转区域后恢复普通指针");
+                    Click(ownerButtons[0]);Check(Field<WireEvent>("_selected").objectId=="pb2","写入时最新实例链接指向正确播放实例");
                     var blockRequest=new WireEvent {kind="block",entity="control",objectId="pb1",name="请求下一 Block",time=15,value=3};
                     var blockGroup=ControlPresentation.Group(controlsFixture.Append(blockRequest),20).First(g=>g.Name.StartsWith("Same Cue"));
                     Check(blockGroup.Rows.Any(r=>r.Name=="请求下一 Block")&&blockGroup.Rows.Any(r=>r.Name=="Block 位置采样"),"Playback级Block请求同样不伪装成位置采样");
                     var navSession=Meta(Guid.NewGuid().ToString("N"),"native","nav");sessions[navSession.Id]=navSession;
                     var navRequest=new WireEvent {session=navSession.Id,seq=1,time=1,kind="request",entity="cue",objectId="2:playback:1:9",parentId="2:p",name="Music Fixture"};
                     var navSource=new WireEvent {session=navSession.Id,seq=3,time=2,kind="position",entity="source",objectId="2:source",epoch=2,name="Music Fixture",x=3,z=5,raw="{\"derived\":{\"links\":[{\"playback\":\"playback:1:9\",\"cue\":\"Music Fixture\"}]}}"};
+                    navSource.detail="CRI 音源世界坐标：名称来自原生 Voice/Cue 关联，不是 GameObject 名称。";
                     navRequest.raw="{\"parameters\":[{\"name\":\"Acb Name\",\"value\":\"MusicSheet\"}]}";
                     Check(CueMetadataPresentation.AcbName(navRequest)=="MusicSheet","CueSheet读取所属实例原生ACB名");
                     Check(CueMetadataPresentation.AcbName(new WireEvent{raw="{}"})=="","缺少ACB不猜测CueSheet");
@@ -377,6 +507,17 @@ public sealed class SmokeApp : Application
                     Select(navSession);window.ApplyUiAction("workspace","Timeline");window.ApplyUiAction("range","0:3");window.ApplyUiAction("select","1");
                     var beforeNav=State().GetRawText();window.ApplyUiAction("navigate","space");
                     Check(State().GetProperty("workspace").GetString()=="Location"&&Field<WireEvent>("_selected").objectId=="2:source"&&State().GetProperty("end").GetDouble()==3,"播放到空间使用epoch关联并保留历史时刻");
+                    var spatialMore=(StackPanel)Field<StackPanel>("_details").Children.OfType<Expander>().Single(x=>x.Tag?.ToString()=="more-information").Content!;
+                    Check(spatialMore.Children.OfType<SelectableTextBlock>().Any(x=>x.Tag?.ToString()=="field:详情")&&!spatialMore.Children.OfType<Grid>().Any(x=>x.Tag?.ToString()=="row:详情"),"空间来源说明在更多信息中占满正文宽度");
+                    var rawFold=spatialMore.Children.OfType<Expander>().Single(x=>x.Tag?.ToString()=="technical");
+                    Check(!rawFold.IsExpanded&&((StackPanel)rawFold.Content!).Children.OfType<Border>().Any(x=>x.Tag?.ToString()=="raw-content"&&x.Child is ScrollViewer scroll&&scroll.MaxHeight==180),"原始内容默认隐藏且展开后有固定阅读高度");
+                    var spatialFold=Field<StackPanel>("_details").Children.OfType<Expander>().Single(x=>x.Tag?.ToString()=="more-information");
+                    spatialFold.IsExpanded=true;await Task.Delay(150);
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/position-more.png"),window.CapturePng("window"));
+                    rawFold.IsExpanded=true;await Task.Delay(150);
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/position-raw.png"),window.CapturePng("window"));
+                    rawFold.IsExpanded=false;
+                    spatialFold.IsExpanded=false;
                     window.ApplyUiAction("navigate","playback");
                     Check(State().GetProperty("workspace").GetString()=="Timeline"&&Field<WireEvent>("_selected").objectId==navRequest.objectId,"空间反向定位精确Playback");
                     window.ApplyUiAction("back",null);Check(State().GetProperty("workspace").GetString()=="Location","返回上一位置恢复空间视图");
@@ -384,8 +525,8 @@ public sealed class SmokeApp : Application
                     Check(AssociationPresentation.SourcesFor(navSession.ViewSnapshot(),["1:playback:1:9"],3).Length==0,"空间关系不跨epoch误关联");
                     Check(AssociationPresentation.SourcesFor(navSession.ViewSnapshot(),[navRequest.objectId],1.5).Length==0,"不使用未来位置填历史");
                     Check(AssociationPresentation.Categories(navSession.ViewSnapshot(),navRequest.objectId,3).Single().name=="Music","Category属于具体播放实例");
-                    var categoryLabel=Field<StackPanel>("_details").GetLogicalDescendants().OfType<TextBlock>().First(b=>b.Tag?.ToString()?.StartsWith("category-info:")==true);
-                    Check(categoryLabel.Text=="Music"&&State().GetProperty("category").GetString()=="","Category仅显示归属，不改变筛选");
+                    var categoryLabel=Field<StackPanel>("_details").GetLogicalDescendants().OfType<SelectableTextBlock>().First(b=>b.Tag?.ToString()?.StartsWith("category-info:")==true);
+                    Check(categoryLabel.Text=="Music"&&categoryLabel.ContextMenu!=null&&State().GetProperty("category").GetString()=="","Category 可选取和右键复制，且不改变筛选");
                     window.ApplyUiAction("workspace","Logs");window.ApplyUiAction("log-search","开始播放 Music");
                     Check(Field<ListBox>("_events").ItemsSource!.Cast<ListBoxItem>().Count(i=>i.Tag is WireEvent)==1,"日志支持中文动作与CueName组合搜索");
                     window.ApplyUiAction("log-follow","false");
@@ -407,7 +548,7 @@ public sealed class SmokeApp : Application
                     var selectedCard=Field<StackPanel>("_sessions").GetLogicalDescendants().OfType<Button>().Single(b=>b.Tag?.ToString()=="selected-client");
                     Check(selectedCard.BorderThickness.Left==1,"客户端选中框有实际厚度");
                     window.ApplyUiAction("workspace","Timeline");window.ApplyUiAction("select","1");
-                    Check(Field<StackPanel>("_details").Children.OfType<Grid>().Any(g=>g.Tag?.ToString()=="duration-summary"&&g.ColumnDefinitions.Count==2),"播放详情使用双列时长摘要");
+                    Check(Field<StackPanel>("_details").Children.OfType<Border>().Any(b=>b.Tag?.ToString()=="section:playback-time")&&Field<StackPanel>("_details").Children.OfType<Grid>().Any(g=>g.Tag?.ToString()=="row:已播放"),"播放时间以紧凑属性行呈现");
                     var stopRequest=new WireEvent {kind="stop-request",entity="cue",objectId=navRequest.objectId,time=2,endReason="playback-stop",session=navSession.Id};
                     var stopping=PlaybackPresentation.Group(new[]{navRequest,new WireEvent{kind="play",entity="voice",objectId="vv",parentId=navRequest.objectId,time=1.1},stopRequest},3).Single();
                     Check(stopping.End==null&&stopping.StatusLabel=="停止中"&&stopping.StopRequestedAt==2,"停止请求不提前结束实例");
@@ -439,27 +580,43 @@ public sealed class SmokeApp : Application
                     Select(navSession);window.ApplyUiAction("workspace","Timeline");window.ApplyUiAction("range","0:4");window.ApplyUiAction("select","1");
                     await Task.Delay(350);
                     var drawer=Field<StackPanel>("_details");
-                    Check(drawer.Children.OfType<Grid>().Any(g=>g.Tag?.ToString()=="duration-summary"),"Cue时长直接显示在详情一级");
+                    var timeSection=drawer.Children.ToList().FindIndex(x=>x.Tag?.ToString()=="section:playback-time");
+                    var elapsedRow=drawer.Children.ToList().FindIndex(x=>x.Tag?.ToString()=="row:已播放");
+                    var cueSection=drawer.Children.ToList().FindIndex(x=>x.Tag?.ToString()=="section:cue-info");
+                    var cueDuration=drawer.Children.OfType<Grid>().Single(x=>x.Tag?.ToString()=="row:Cue 时长");
+                    Check(timeSection>=0&&timeSection<elapsedRow&&elapsedRow<cueSection&&cueSection<drawer.Children.IndexOf(cueDuration)&&cueDuration.Children.OfType<SelectableTextBlock>().Single().FontSize==13,"观测历时先于 Cue 配置信息，Cue 时长不再放大");
                     Check(drawer.Children.OfType<Expander>().Count()==1 && drawer.Children.OfType<Expander>().Single().Header?.ToString()=="更多信息","详情仅有一个更多信息折叠");
-                    var cueText=drawer.GetVisualDescendants().OfType<SelectableTextBlock>().First(x=>x.Tag?.ToString()=="inspector-title");
-                    Check(cueText.ContextMenu!=null,"Cue 名称可选择并复制完整名称");
+                    var cueText=Field<Border>("_inspector").GetVisualDescendants().OfType<SelectableTextBlock>().Single(x=>x.Tag?.ToString()=="inspector-kind");
+                    Check(cueText.Text=="Music Fixture"&&cueText.ContextMenu!=null,"顶栏 Cue 名称可选择并复制完整名称");
+                    Check(drawer.GetLogicalDescendants().OfType<TextBlock>().Where(x=>!string.IsNullOrWhiteSpace(x.Text)).All(x=>x.ContextMenu!=null),"抽屉正文、属性标签与高级记录的每段文字均可右键复制");
+                    Check(!drawer.Children.Any(x=>x.Tag?.ToString() is "inspector-title" or "playback-heading"),"Cue 名称和实例编号在正文不重复出现");
+                    Check(drawer.Children.OfType<Grid>().Where(x=>x.Tag?.ToString()?.StartsWith("row:")==true).All(x=>x.Children.OfType<SelectableTextBlock>().Any()),"所有属性值均可选取");
                     var sheetText=drawer.Children.OfType<StackPanel>().Single(x=>x.Tag?.ToString()=="cue-sheet").Children.OfType<SelectableTextBlock>().Single();
                     Check(sheetText.Text=="MusicSheet" && sheetText.ContextMenu!=null,"CueSheet 名称支持独立复制");
+                    sheetText.SelectionStart=0;sheetText.SelectionEnd=5;
+                    typeof(MainWindow).GetMethod("Inspector",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,null);
+                    var keptSheet=Field<StackPanel>("_details").Children.OfType<StackPanel>().Single(x=>x.Tag?.ToString()=="cue-sheet").Children.OfType<SelectableTextBlock>().Single();
+                    Check(ReferenceEquals(sheetText,keptSheet)&&keptSheet.SelectedText=="Music","实时更新保留 CueSheet 选区");
                     var categoryGrid=drawer.Children.OfType<Grid>().FirstOrDefault(x=>x.Tag?.ToString()=="categories");
                     Check(categoryGrid==null||categoryGrid.Children[0].VerticalAlignment==Avalonia.Layout.VerticalAlignment.Top,"Category 标签与首行对齐");
                     var morePanel=(StackPanel)drawer.Children.OfType<Expander>().Single().Content!;
-                    Check(!morePanel.Children.OfType<Expander>().Any(),"更多信息不再套多层折叠");
+                    Check(morePanel.Children.OfType<Expander>().Count()==1&&morePanel.Children.OfType<Expander>().Single().Tag?.ToString()=="technical"&&!morePanel.Children.OfType<Expander>().Single().IsExpanded,"原始记录使用独立的高级入口，默认收起");
                     Check(drawer.Children.OfType<StackPanel>().Any(p=>p.Tag?.ToString()=="inspector-links"),"所有主要定位集中在同一区域");
                     Check(!drawer.Children.OfType<Grid>().Any(g=>g.Tag?.ToString() is "row:事件发生于" or "row:结束原因"),"播放中无重复时间及尚未结束行");
                     Check(!window.GetVisualDescendants().OfType<Button>().Any(b=>ToolTip.GetTip(b)?.ToString()=="日志面板"),"日志只有一个常驻入口");
-                    Check(drawer.Children.OfType<Grid>().Any(g=>g.Tag?.ToString()=="playback-heading"),"实例编号保留在一级标题");
+                    Check(Field<Border>("_inspector").GetVisualDescendants().OfType<SelectableTextBlock>().Any(x=>x.Tag?.ToString()=="inspector-instance"&&x.ContextMenu!=null),"实例编号在固定顶栏可选取复制");
                     Check(!drawer.Children.OfType<Grid>().Any(g=>g.Tag?.ToString()=="row:结束播放"),"播放中不显示红色空结束行");
                     foreach(var testTheme in new[]{"dark","light"}) {
                         window.ApplyUiAction("theme",testTheme);await Task.Delay(180);
                         var fold=Field<StackPanel>("_details").GetVisualDescendants().OfType<Expander>().First(f=>f.Tag?.ToString()=="more-information");
                         var heading=fold.GetVisualDescendants().OfType<Button>().First();
+                        Check(heading.ContextMenu!=null,"折叠标题可右键复制："+testTheme);
                         Click(heading);await Task.Delay(650);
                         Check(fold.IsExpanded&&((Avalonia.Media.RotateTransform)fold.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().First().RenderTransform!).Angle==90,"折叠展开经过刷新箭头同步："+testTheme);
+                        var primaryValue=Field<StackPanel>("_details").Children.OfType<Grid>().Single(g=>g.Tag?.ToString()=="row:状态").Children.OfType<SelectableTextBlock>().Single();
+                        var secondaryValue=((StackPanel)fold.Content!).Children.OfType<Grid>().Single(g=>g.Tag?.ToString()=="row:请求播放").Children.OfType<SelectableTextBlock>().Single();
+                        Check(Math.Abs(primaryValue.TranslatePoint(new Point(),window)!.Value.X-secondaryValue.TranslatePoint(new Point(),window)!.Value.X)<2,
+                            "更多信息展开后的属性值与一级字段同列："+testTheme);
                         File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v11-detail-"+testTheme+".png"),window.CapturePng("window"));
                         Click(heading);await Task.Delay(350);
                         Check(!fold.IsExpanded&&((Avalonia.Media.RotateTransform)fold.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().First().RenderTransform!).Angle==0,"折叠收起经过刷新箭头同步："+testTheme);
@@ -507,6 +664,17 @@ public sealed class SmokeApp : Application
                     var resourceTimeline=Field<TimelineControl>("_timeline");resourceTimeline.ExpandedKeys=["technical-metrics","pool-config","metric:CRI CPUCpuLoad"];
                     resourceTimeline.InvalidateVisual();await Task.Delay(200);
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v08-resources.png"),window.CapturePng("window"));
+                    var unknownSession=Meta(Guid.NewGuid().ToString("N"),"native","unknown-start");sessions[unknownSession.Id]=unknownSession;
+                    var unknownRequest=new WireEvent {session=unknownSession.Id,seq=1,time=1,kind="request",entity="cue",objectId="hot-pb",name="热接入声音",detail="连接时已有播放；起点未知"};
+                    unknownSession.Accept(unknownRequest);
+                    unknownSession.Accept(new WireEvent {session=unknownSession.Id,seq=2,time=1.1,kind="play",entity="voice",objectId="hot-voice",parentId="hot-pb",name="热接入声音",detail="连接时已存在 Voice；起点未知"});
+                    Select(unknownSession);window.ApplyUiAction("workspace","Timeline");window.ApplyUiAction("range","0:3");
+                    typeof(MainWindow).GetMethod("SelectEvent",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,[unknownRequest]);
+                    var unknownStart=Field<StackPanel>("_details").Children.OfType<Grid>().Single(x=>x.Tag?.ToString()=="row:开始播放");
+                    var palette=Field<object>("_p");var good=palette.GetType().GetProperty("Good")!.GetValue(palette)!.ToString();
+                    Check(unknownStart.Children.OfType<SelectableTextBlock>().Single() is {Text:"开始发生在记录之前"} startValue&&startValue.Foreground?.ToString()==good&&unknownStart.Children.OfType<TextBlock>().First(x=>x.Text=="开始播放").Foreground?.ToString()==good,"起点未知但有播放证据时开始标签和值仍使用绿色");
+                    await Task.Delay(400);
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/unknown-start.png"),window.CapturePng("window"));
                     Console.WriteLine($"结果：{passed}/{passed} UI 检查通过"); desktop.Shutdown(0);
                 }
                 catch (Exception ex) { Console.Error.WriteLine($"FAIL：已通过 {passed} 项；{ex}"); desktop.Shutdown(1); }

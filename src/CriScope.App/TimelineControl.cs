@@ -14,6 +14,8 @@ public sealed class TimelineControl : Control
 {
     internal Palette Palette { get; set; } = new(false);
     public WireEvent[] Events { get; set; } = [];
+    public WireEvent[] AssociationEvents { get; set; } = [];
+    public Func<WireEvent, (PlaybackGroup[] Owners, string EmptyLabel)>? ResolveSettingEvidence { get; set; }
     public WireEvent[] Discontinuities { get; set; } = [];
     public WireEvent[] SupplementMetrics { get; set; } = [];
     public WireEvent? Selected { get; set; }
@@ -22,12 +24,19 @@ public sealed class TimelineControl : Control
     public double Span { get; set; } = 30;
     public bool Live { get; set; } = true;
     public bool SourceConnected { get; set; } = true;
+    public bool BusHistoryIsSparse { get; set; }
     public double TimeOrigin { get; set; }
     public HashSet<string> ControlKinds { get; } = new(ControlPresentation.Kinds, StringComparer.Ordinal);
     public bool ShowSources { get; set; } = true;
     public bool ShowDistanceListeners { get; set; } = true;
     public bool ShowBaseListeners { get; set; }
     public Func<double,string>? WallStamp { get; set; }
+    public Func<double,DateTimeOffset?>? ClockTimeAt { get; set; }
+    public bool PreferWallTime { get; set; } = true;
+    public bool ShowingWallTime => PreferWallTime && ClockTimeAt?.Invoke(End) is not null;
+    public string DisplayStamp(double time) => ShowingWallTime && ClockTimeAt?.Invoke(time) is { } value
+        ? value.ToLocalTime().ToString("MM-dd HH:mm:ss.fff",CultureInfo.InvariantCulture) : Stamp(time);
+    public event Action<bool>? TimeAxisModeChanged;
     public string Stamp(double time) => TimeLabel(time-TimeOrigin);
     public void SetControlKind(string kind, bool enabled)
     { if(!ControlPresentation.Kinds.Contains(kind))throw new ArgumentException("未知控制类型",nameof(kind));if(enabled)ControlKinds.Add(kind);else ControlKinds.Remove(kind);_vertical=0;ViewChanged?.Invoke();InvalidateVisual(); }
@@ -48,6 +57,8 @@ public sealed class TimelineControl : Control
     private DateTime _flashUntil;
     public string SpatialFocusId { get; set; } = "";
     private readonly List<(Rect Rect, WireEvent Event)> _links = [];
+    private static readonly Cursor LinkCursor = new(StandardCursorType.Hand);
+    private Rect? _hoverLinkRect;
     public double VerticalOffset { get => _vertical; set => _vertical = Math.Max(0, value); }
     public string[] ExpandedKeys { get => _expanded.ToArray(); set { _expanded.Clear(); foreach(var key in value) _expanded.Add(key); } }
     public void FocusEvent(WireEvent item)
@@ -59,7 +70,7 @@ public sealed class TimelineControl : Control
             foreach(var group in PlaybackGroups().Where(g => g.End == null || g.End.time >= Start))
             {
                 if(group.Id == id) { if(item.entity == "voice") _expanded.Add("playback:" + id); break; }
-                _vertical += 54 + (_expanded.Contains("playback:"+group.Id) ? Math.Max(1,group.Voices.Count(v=>v.LastOrDefault(e=>e.kind=="stop") is not {} stop || stop.time>=Start))*38 : 0);
+                _vertical += PlaybackRowHeight + (_expanded.Contains("playback:"+group.Id) ? Math.Max(1,group.Voices.Count(v=>v.LastOrDefault(e=>e.kind=="stop") is not {} stop || stop.time>=Start))*38 : 0);
             }
         }
         else if(Mode == "AISAC")
@@ -113,16 +124,22 @@ public sealed class TimelineControl : Control
     private double _scrollGrab;
     private int _busCount, _busChannels;
     private readonly List<(Rect rect, WireEvent item)> _hits = [];
+    private readonly List<(Rect rect, string tip)> _playbackTips = [];
     private readonly List<Rect> _relatedCueBounds = [];
     private readonly List<(Rect rect, string key)> _expandHits = [];
     private readonly HashSet<string> _expanded = [];
     private readonly List<(Rect rect, string key)> _toggleHits = [];
     private readonly List<(Rect rect, WireEvent? item, string? key)> _spatialHits = [];
-    private WireEvent[]? _groupEvents, _groupGaps, _controlEvents;
+    private WireEvent[]? _groupEvents, _groupGaps, _controlEvents, _controlAssociationEvents;
     private double _groupEnd=double.NaN, _controlEnd=double.NaN;
     private int _controlMask;
     private PlaybackGroup[] _playbackGroups=[];
     private ControlGroup[] _controlRows=[];
+    public void InvalidateSettingEvidence()
+    {
+        _controlEvents=null;
+        InvalidateVisual();
+    }
     private PlaybackGroup[] PlaybackGroups()
     {
         if(!ReferenceEquals(_groupEvents,Events)||!ReferenceEquals(_groupGaps,Discontinuities)||_groupEnd!=End)
@@ -132,14 +149,20 @@ public sealed class TimelineControl : Control
     private ControlGroup[] ControlRows()
     {
         var mask=0;for(int i=0;i<ControlPresentation.Kinds.Length;i++)if(ControlKinds.Contains(ControlPresentation.Kinds[i]))mask|=1<<i;
-        if(!ReferenceEquals(_controlEvents,Events)||_controlEnd!=End||_controlMask!=mask)
-        { _controlEvents=Events;_controlEnd=End;_controlMask=mask;_controlRows=ControlPresentation.Group(Events,End,ControlKinds,ControlLabels); }
+        var relationEvidence=AssociationEvents.Length>0?AssociationEvents:Events;
+        if(!ReferenceEquals(_controlEvents,Events)||!ReferenceEquals(_controlAssociationEvents,relationEvidence)||_controlEnd!=End||_controlMask!=mask)
+        {
+            _controlEvents=Events;_controlAssociationEvents=relationEvidence;_controlEnd=End;_controlMask=mask;
+            _controlRows=ControlPresentation.Group(Events,End,ControlKinds,ControlLabels,relationEvidence,ResolveSettingEvidence);
+        }
         return _controlRows;
     }
     private const double LabelWidth = 214;
+    private const double PlaybackRowHeight = 44;
     private double PlotWidth => Math.Max(40, Bounds.Width-LabelWidth-22);
     private double MixingViewportHeight => Math.Max(1,Bounds.Height-106);
     private double MixingMaxScroll => Math.Max(0,_contentHeight+10-MixingViewportHeight);
+    private double ResourcesMaxScroll => Math.Max(0,_contentHeight+28-Bounds.Height);
     private Rect MixingScrollTrack => new(Bounds.Width-18,76,18,MixingViewportHeight);
     private Rect MixingScrollThumb
     {
@@ -149,6 +172,24 @@ public sealed class TimelineControl : Control
     public double Start => End-ViewSpan;
     private double X(double time) => LabelWidth+(time-Start)/ViewSpan*PlotWidth;
     private static readonly Typeface Font = new("Segoe UI, Microsoft YaHei UI");
+    private void SelectTimeAxis(bool wall)
+    {
+        if(PreferWallTime==wall)return;
+        PreferWallTime=wall;TimeAxisModeChanged?.Invoke(wall);ViewChanged?.Invoke();InvalidateVisual();
+    }
+    public void SetTimeAxisMode(bool wall) => SelectTimeAxis(wall);
+    private static double WallTickStep(double span,double width)
+    {
+        var pixels=span<1?110:span>=3600?100:78;
+        var rough=span/Math.Clamp(width/pixels,2,10);
+        var magnitude=Math.Pow(10,Math.Floor(Math.Log10(rough)));
+        return rough/magnitude<=1?magnitude:rough/magnitude<=2?2*magnitude:rough/magnitude<=5?5*magnitude:10*magnitude;
+    }
+    private static string WallTickLabel(DateTimeOffset wall,double step)
+    {
+        var local=wall.ToLocalTime();
+        return local.ToString(step<1?"HH:mm:ss.fff":step<60?"HH:mm:ss":step<3600?"HH:mm":"MM-dd HH:mm",CultureInfo.InvariantCulture);
+    }
     public static string TimeLabel(double v)
     {
         if(!double.IsFinite(v))return "—";
@@ -160,14 +201,29 @@ public sealed class TimelineControl : Control
     {
         bool had=_expanded.Contains(key);
         ToolTip.SetTip(this,null);ToolTip.SetIsOpen(this,false);
+        SetHoveredLink(null);
         if(key.StartsWith("spatial:",StringComparison.Ordinal)){foreach(var old in _expanded.Where(k=>k.StartsWith("spatial:",StringComparison.Ordinal)).ToArray())_expanded.Remove(old);_vertical=0;}
         if(had)_expanded.Remove(key);else _expanded.Add(key);InvalidateVisual();
+    }
+    private void SetHoveredLink(Rect? rect)
+    {
+        if(_hoverLinkRect==rect)return;
+        _hoverLinkRect=rect;
+        Cursor=rect.HasValue?LinkCursor:null;
+        InvalidateVisual();
+    }
+    private WireEvent? UpdateLinkHover(Point point)
+    {
+        var link=_links.LastOrDefault(h=>h.Rect.Contains(point));
+        SetHoveredLink(link.Event==null?null:link.Rect);
+        return link.Event;
     }
 
     public TimelineControl()
     {
         ClipToBounds=true; Focusable=true; MinHeight=220;
         PointerWheelChanged += (_,e) => {
+            SetHoveredLink(null);
             if(Mode=="Location")
             {
                 if(SpatialOverlayBounds.Contains(e.GetPosition(this)))_vertical=Math.Clamp(_vertical-e.Delta.Y*34,0,SpatialOverlayMaxScroll);
@@ -177,6 +233,12 @@ public sealed class TimelineControl : Control
                 var f=Math.Clamp((e.GetPosition(this).X-LabelWidth)/PlotWidth,0,1); var anchor=Start+f*ViewSpan;
                 Span=Math.Clamp(Span*(e.Delta.Y>0?.8:1.25),.25,86400); if(!Live)End=anchor+Span*(1-f);
             } else if(Mode!="Mixing" && e.KeyModifiers.HasFlag(KeyModifiers.Shift)){End-=e.Delta.Y*Span*.1;Live=false;}
+            else if(Mode=="Performance")
+            {
+                var next=Math.Clamp(_vertical-e.Delta.Y*36,0,ResourcesMaxScroll);
+                if(next==_vertical){e.Handled=true;return;}
+                _vertical=next;
+            }
             else _vertical=Math.Clamp(_vertical-e.Delta.Y*36,0,Mode=="Mixing"?MixingMaxScroll:Math.Max(0,_contentHeight+100-Bounds.Height));
             if(Mode!="Mixing"||e.KeyModifiers.HasFlag(KeyModifiers.Control)||e.KeyModifiers.HasFlag(KeyModifiers.Shift))ViewChanged?.Invoke();InvalidateVisual();e.Handled=true;
         };
@@ -184,6 +246,7 @@ public sealed class TimelineControl : Control
             Focus();var p=e.GetPosition(this);
             if(Mode=="Location"&&SpatialOverlayBounds.Contains(p))
             {
+                SetHoveredLink(null);
                 ToolTip.SetTip(this,null);ToolTip.SetIsOpen(this,false);
                 if(_spatialClose.Contains(p)){CloseSpatialList();e.Handled=true;return;}
                 if(SpatialOverlayMaxScroll>0&&_spatialScrollTrack.Contains(p))
@@ -223,16 +286,23 @@ public sealed class TimelineControl : Control
         };
         PointerMoved += (_,e) => {
             var p=e.GetPosition(this);
-            if(_spatialScrollDragging){SetSpatialScrollFromPointer(p.Y);e.Handled=true;return;}
-            if(_scrollDragging){SetMixingScrollFromPointer(p.Y);e.Handled=true;return;}
-            if(Mode=="Location"&&SpatialOverlayBounds.Contains(p)){ToolTip.SetTip(this,null);ToolTip.SetIsOpen(this,false);return;}
-            if(_drag == null && _links.LastOrDefault(h=>h.Rect.Contains(p)).Event is {} linkEvent){ToolTip.SetTip(this,"定位声音时间线 · "+linkEvent.name);return;}
-            if(_drag is not {} start){var hit=_hits.LastOrDefault(h=>h.rect.Contains(p));ToolTip.SetTip(this,hit.item==null?null:$"{hit.item.name}\n{Stamp(hit.item.time)} · {hit.item.kind}\n{hit.item.detail}");return;}
+            if(_spatialScrollDragging){SetHoveredLink(null);SetSpatialScrollFromPointer(p.Y);e.Handled=true;return;}
+            if(_scrollDragging){SetHoveredLink(null);SetMixingScrollFromPointer(p.Y);e.Handled=true;return;}
+            if(Mode=="Location"&&SpatialOverlayBounds.Contains(p)){SetHoveredLink(null);ToolTip.SetTip(this,null);ToolTip.SetIsOpen(this,false);return;}
+            var linkEvent=_drag==null?UpdateLinkHover(p):null;
+            if(linkEvent!=null){ToolTip.SetTip(this,"定位声音时间线 · "+linkEvent.name);return;}
+            if(_drag!=null)SetHoveredLink(null);
+            if(_drag is not {} start){
+                var playbackTip=Mode=="Timeline"?_playbackTips.LastOrDefault(h=>h.rect.Contains(p)).tip:null;
+                if(playbackTip!=null){ToolTip.SetTip(this,playbackTip);return;}
+                var hit=_hits.LastOrDefault(h=>h.rect.Contains(p));ToolTip.SetTip(this,hit.item==null?null:$"{hit.item.name}\n{DisplayStamp(hit.item.time)} · {hit.item.kind}\n{hit.item.detail}");return;
+            }
             var delta=p.X-start.X;if(Math.Abs(delta)<8)return;
             if(_panning){End=_dragEnd-delta/PlotWidth*ViewSpan;Live=false;}
             else{SelectionStart=Start+Math.Clamp((start.X-LabelWidth)/PlotWidth,0,1)*ViewSpan;SelectionEnd=Start+Math.Clamp((p.X-LabelWidth)/PlotWidth,0,1)*ViewSpan;}
             ViewChanged?.Invoke();InvalidateVisual();
         };
+        PointerExited += (_,_)=>{SetHoveredLink(null);ToolTip.SetTip(this,null);};
         PointerReleased += (_,e)=>{_drag=null;_scrollDragging=false;_spatialScrollDragging=false;e.Pointer.Capture(null);};
         KeyDown += (_,e)=>{if(e.Key==Key.Escape&&Mode=="Location"&&_spatialExpandedKey!=null){CloseSpatialList();e.Handled=true;}else if(e.Key==Key.Space){_space=true;e.Handled=true;}};
         KeyUp += (_,e)=>{if(e.Key==Key.Space){_space=false;e.Handled=true;}};
@@ -242,28 +312,63 @@ public sealed class TimelineControl : Control
     { var track=MixingScrollTrack;var thumb=MixingScrollThumb;_vertical=Math.Clamp((y-_scrollGrab-track.Y)/Math.Max(1,track.Height-thumb.Height),0,1)*MixingMaxScroll;InvalidateVisual(); }
     private void Text(DrawingContext c,string text,double x,double y,IBrush? brush=null,double size=11)
         =>c.DrawText(new FormattedText(text,CultureInfo.InvariantCulture,FlowDirection.LeftToRight,Font,size,brush??Palette.Muted),new Point(x,y));
+    private static string Elide(string value,double width,double size)
+    {
+        double Measure(string text)=>new FormattedText(text,CultureInfo.InvariantCulture,FlowDirection.LeftToRight,Font,size,Brushes.White).Width;
+        if(Measure(value)<=width)return value;
+        const string ellipsis="…";
+        if(Measure(ellipsis)>width)return "";
+        int low=0,high=value.Length;
+        while(low<high){var mid=(low+high+1)/2;if(Measure(value[..mid]+ellipsis)<=width)low=mid;else high=mid-1;}
+        return value[..low]+ellipsis;
+    }
     private void RowName(DrawingContext c,string name,double y,IBrush? brush=null)
     {using var clip=c.PushClip(new Rect(12,y,LabelWidth-24,23));Text(c,name,12,y,brush??Palette.Text,12);}
     private void Empty(DrawingContext c,string title,string description)
     {Text(c,title,26,105,Palette.Text,18);Text(c,description,26,141,size:12);}
     public override void Render(DrawingContext c)
     {
-        _relatedCueBounds.Clear();base.Render(c);c.FillRectangle(Palette.Canvas,new Rect(Bounds.Size));_links.Clear();_hits.Clear();_expandHits.Clear();_toggleHits.Clear();_spatialHits.Clear();_spatialListHits.Clear();SpatialOverlayBounds=default;SpatialOverlayMaxScroll=0;_spatialExpandedKey=null;
+        _relatedCueBounds.Clear();base.Render(c);c.FillRectangle(Palette.Canvas,new Rect(Bounds.Size));_links.Clear();_hits.Clear();_playbackTips.Clear();_expandHits.Clear();_toggleHits.Clear();_spatialHits.Clear();_spatialListHits.Clear();SpatialOverlayBounds=default;SpatialOverlayMaxScroll=0;_spatialExpandedKey=null;
         if(Events.Length==0&&SupplementMetrics.Length==0){Empty(c,"等待音频观测","在游戏里开启 CriScope 采集，或打开已有日志。");return;}
         if(Mode=="Location"){DrawLocations(c);return;}if(Mode=="Mixing"){DrawMixing(c);DrawScrollHint(c);return;}
-        double step=Math.Pow(10,Math.Floor(Math.Log10(ViewSpan/8)));if(ViewSpan/step>16)step*=5;else if(ViewSpan/step>10)step*=2;
-        for(double t=Math.Max(TimeOrigin,TimeOrigin+Math.Ceiling((Start-TimeOrigin)/step)*step);t<=End;t+=step){var x=X(t);c.DrawLine(new Pen(Palette.Border,.5),new Point(x,31),new Point(x,Bounds.Height-28));Text(c,Stamp(t),x+4,10,size:10);}
-        Text(c,"距本次采集开始",12,10,size:10);c.DrawLine(new Pen(Palette.Border),new Point(0,34),new Point(Bounds.Width,34));
+        var axisStart=Math.Max(TimeOrigin,Start);
+        var clockAtStart=ShowingWallTime?ClockTimeAt?.Invoke(axisStart):null;
+        if(clockAtStart is { } clockStart)
+        {
+            var step=WallTickStep(ViewSpan,PlotWidth);
+            var wallStart=clockStart.ToUnixTimeMilliseconds()/1000d;
+            for(double seconds=Math.Ceiling(wallStart/step)*step;seconds<=wallStart+(End-axisStart)+step*.000001;seconds+=step)
+            {
+                var t=axisStart+seconds-wallStart;var x=X(t);
+                c.DrawLine(new Pen(Palette.Border,.5),new Point(x,31),new Point(x,Bounds.Height-28));
+                var wall=DateTimeOffset.FromUnixTimeMilliseconds((long)Math.Round(seconds*1000));
+                Text(c,WallTickLabel(wall,step),x+4,10,size:10);
+            }
+        }
+        else
+        {
+            double step=Math.Pow(10,Math.Floor(Math.Log10(ViewSpan/8)));if(ViewSpan/step>16)step*=5;else if(ViewSpan/step>10)step*=2;
+            for(double t=Math.Max(TimeOrigin,TimeOrigin+Math.Ceiling((Start-TimeOrigin)/step)*step);t<=End;t+=step){var x=X(t);c.DrawLine(new Pen(Palette.Border,.5),new Point(x,31),new Point(x,Bounds.Height-28));Text(c,Stamp(t),x+4,10,size:10);}
+        }
+        c.DrawLine(new Pen(Palette.Border),new Point(0,34),new Point(Bounds.Width,34));
         if(Mode=="AISAC")DrawControls(c);else if(Mode=="Performance")DrawResources(c);else DrawTracks(c);
         if(SelectionStart is {} a&&SelectionEnd is {} b&&Math.Abs(a-b)>.000001){var l=Math.Clamp(X(Math.Min(a,b)),LabelWidth,LabelWidth+PlotWidth);var r=Math.Clamp(X(Math.Max(a,b)),LabelWidth,LabelWidth+PlotWidth);c.DrawRectangle(null,new Pen(Palette.Selection,1.5),new Rect(l,35,Math.Max(0,r-l),Math.Max(0,Bounds.Height-64)));}
         if(Selected is {} selected&&selected.time>=Start&&selected.time<=End) {
             var x=X(selected.time);double top=35,bottom=Bounds.Height-28;
-            foreach(var rect in _relatedCueBounds.Where(r=>x>=r.Left&&x<=r.Right).OrderBy(r=>r.Top)) {
-                var end=Math.Clamp(rect.Top,top,bottom);
-                if(end>top)c.DrawLine(new Pen(Palette.Selection,1),new Point(x,top),new Point(x,end));
-                top=Math.Clamp(Math.Max(top,rect.Bottom),top,bottom);
+            if(Mode=="AISAC")
+            {
+                c.DrawLine(new Pen(Palette.Selection,1.5),new Point(x,28),new Point(x,34));
+                c.DrawEllipse(Palette.Selection,null,new Point(x,28),2,2);
             }
-            if(top<bottom)c.DrawLine(new Pen(Palette.Selection,1),new Point(x,top),new Point(x,bottom));
+            else
+            {
+                foreach(var rect in _relatedCueBounds.Where(r=>x>=r.Left&&x<=r.Right).OrderBy(r=>r.Top)) {
+                    var end=Math.Clamp(rect.Top,top,bottom);
+                    if(end>top)c.DrawLine(new Pen(Palette.Selection,1),new Point(x,top),new Point(x,end));
+                    top=Math.Clamp(Math.Max(top,rect.Bottom),top,bottom);
+                }
+                if(top<bottom)c.DrawLine(new Pen(Palette.Selection,1),new Point(x,top),new Point(x,bottom));
+            }
         }
         c.FillRectangle(Palette.Canvas,new Rect(0,Bounds.Height-28,Bounds.Width,28));Text(c,"Ctrl 滚轮缩放 · 中键 / 空格拖动浏览历史 · Shift 拖动选区",12,Bounds.Height-21,size:10);
         if(Live)Text(c,SourceConnected?"实时":"已断开",Bounds.Width-64,Bounds.Height-21,SourceConnected?Palette.Good:Palette.Request,10);
@@ -283,38 +388,54 @@ public sealed class TimelineControl : Control
             if(anchor==null)continue;
             var key="playback:"+group.Id;bool expanded=_expanded.Contains(key);
             var voiceRows=expanded?group.Voices.Where(v=>v.LastOrDefault(e=>e.kind=="stop") is not {} stop||stop.time>=Start).ToArray():[];
-            double h=54+(expanded?Math.Max(1,voiceRows.Length)*38:0);
+            double h=PlaybackRowHeight+(expanded?Math.Max(1,voiceRows.Length)*38:0);
             if(!VisibleRow(y,h)){y+=h;row+=1+(expanded?Math.Max(1,voiceRows.Length):0);continue;}
-            if(row++%2==0)c.FillRectangle(Palette.Alternate,new Rect(0,y,Bounds.Width,54));
+            if(row++%2==0)c.FillRectangle(Palette.Alternate,new Rect(0,y,Bounds.Width,PlaybackRowHeight));
             var selectedId = Selected?.entity == "voice" ? Selected.parentId : Selected?.objectId;
-            if(selectedId == group.Id) HighlightRow(c,new Rect(1,y+1,Bounds.Width-22,52));
+            if(selectedId == group.Id) HighlightRow(c,new Rect(1,y+1,Bounds.Width-22,PlaybackRowHeight-2));
             RowName(c,(expanded?"− ":"")+group.Name,y+3);
             var status=!SourceConnected&&group.ActiveVoiceCount>0?"已断开 · 保留最后状态":group.StatusLabel;
-            using(c.PushClip(new Rect(27,y+18,LabelWidth-37,35)))
-            {
-                Text(c,status,27,y+20,group.ActiveVoiceCount>0&&SourceConnected?Palette.Good:Palette.Muted,10);
-                var duration=group.DurationAt(End);
-                var durationText=duration is {} elapsed?(group.EndedAt!=null?"持续 ":"已持续 ")+elapsed.ToString("0.000",CultureInfo.InvariantCulture)+" 秒":"";
-                var categories = AssociationPresentation.Categories(Events,group.Id,End);
-                Text(c,durationText + (categories.Length>0 ? " · " + string.Join(" / ",categories.Select(e=>e.name)) : ""),27,y+37,size:9);
-            }
-            var beginLabel=group.StartedAt is {} began?WallStamp?.Invoke(began)??Stamp(began):"";
+            var duration=group.DurationAt(End);
+            var durationText=duration is {} seconds?seconds.ToString("0.000",CultureInfo.InvariantCulture)+" 秒":"";
+            var categories=AssociationPresentation.Categories(Events,group.Id,End);
+            var categoryText=string.Join(" / ",categories.Select(e=>e.name));
+            var summary=string.Join(" · ",new[]{status,durationText,categoryText}.Where(text=>text.Length>0));
+            using(c.PushClip(new Rect(27,y+19,LabelWidth-37,22)))
+                Text(c,Elide(summary,LabelWidth-37,10),27,y+22,group.ActiveVoiceCount>0&&SourceConnected?Palette.Good:Palette.Muted,10);
+            string PlaybackStamp(double time)=>ShowingWallTime && ClockTimeAt?.Invoke(time) is { } wall
+                ? wall.ToLocalTime().ToString("HH:mm:ss.fff",CultureInfo.InvariantCulture) : Stamp(time);
+            string FullStamp(double time)=>ClockTimeAt?.Invoke(time) is { } wall
+                ? wall.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.fff",CultureInfo.InvariantCulture) : Stamp(time);
+            var beginLabel=group.StartedAt is {} began?PlaybackStamp(began):"";
             var endedLabel=group.EndedAt??group.InstanceEndedAt;
-            using(c.PushClip(new Rect(LabelWidth+8,y+1,Math.Max(0,PlotWidth-16),16)))Text(c,(beginLabel.Length>0?beginLabel+" → ":"")+(endedLabel is {} finished?WallStamp?.Invoke(finished)??Stamp(finished):status),LabelWidth+10,y+3,size:9);
-            if(expanded)_expandHits.Add((new Rect(0,y,24,54),key));_hits.Add((new Rect(24,y,LabelWidth-24,54),anchor));
+            var endLabel=endedLabel is {} finished?PlaybackStamp(finished):"";
+            var timeText=beginLabel.Length>0?beginLabel+(endLabel.Length>0?" → "+endLabel:""):
+                endLabel.Length>0?endLabel:group.RequestAt is {} requested?"请求 "+PlaybackStamp(requested):"时间未记录";
+            using(c.PushClip(new Rect(LabelWidth+8,y+1,Math.Max(0,PlotWidth-16),16)))Text(c,timeText,LabelWidth+10,y+3,size:9);
+            var fullTime=group.StartedAt is {} started?"开始播放："+FullStamp(started):"开始播放：未记录";
+            if(group.RequestAt is {} requestedAt)fullTime="请求播放："+FullStamp(requestedAt)+"\n"+fullTime;
+            if(endedLabel is {} endedTime)fullTime+="\n结束播放："+FullStamp(endedTime);
+            var tip=group.Name+"\n"+summary+"\n"+fullTime;
+            var visibleTop=Math.Max(y,68);
+            var visibleBottom=Math.Min(y+PlaybackRowHeight,Bounds.Height-28);
+            if(visibleBottom>visibleTop)_playbackTips.Add((new Rect(24,visibleTop,LabelWidth-24,visibleBottom-visibleTop),tip));
+            var timeTop=Math.Max(y+1,68);
+            var timeBottom=Math.Min(y+17,Bounds.Height-28);
+            if(timeBottom>timeTop)_playbackTips.Add((new Rect(LabelWidth+8,timeTop,Math.Max(0,PlotWidth-16),timeBottom-timeTop),tip));
+            if(expanded)_expandHits.Add((new Rect(0,y,24,PlaybackRowHeight),key));_hits.Add((new Rect(24,y,LabelWidth-24,PlaybackRowHeight),anchor));
             // A Cue request is a point observation, not evidence of continuous voice allocation.
             if(group.Request is {} request&&request.time>=Start&&request.time<=End)
             {
-                var px=X(request.time);var py=y+28;var pen=new Pen(Palette.Request,1.5);
+                var px=X(request.time);var py=y+PlaybackRowHeight/2;var pen=new Pen(Palette.Request,1.5);
                 c.DrawLine(pen,new Point(px,py-6),new Point(px+5,py));c.DrawLine(pen,new Point(px+5,py),new Point(px,py+6));
                 c.DrawLine(pen,new Point(px,py+6),new Point(px-5,py));c.DrawLine(pen,new Point(px-5,py),new Point(px,py-6));
                 if(IsSelected(request))c.DrawEllipse(null,new Pen(Palette.Selection,2),new Point(px,py),9,9);
-                _hits.Add((new Rect(px-6,y,12,54),request));
+                _hits.Add((new Rect(px-6,y,12,PlaybackRowHeight),request));
             }
             foreach(var interval in group.VoiceIntervals)
-                DrawInterval(interval.Begin,interval.End,group.End,y,54,Palette.Selection,
+                DrawInterval(interval.Begin,interval.End,group.End,y,PlaybackRowHeight,Palette.Selection,
                     interval.Begin.kind!="play"||PlaybackPresentation.IsUnknownStart(interval.Begin));
-            y+=54;
+            y+=PlaybackRowHeight;
             if(!expanded)continue;
             foreach(var voice in voiceRows)
             {
@@ -396,54 +517,66 @@ public sealed class TimelineControl : Control
                 var brush=Palette.Control(last.kind);
                 if(i++%2==0)c.FillRectangle(Palette.Panel,new Rect(0,y,Bounds.Width,rowHeight));
                 if(Selected is {} selected && row.Records.Any(e=>e.seq==selected.seq&&e.session==selected.session)) HighlightRow(c,new Rect(24,y+1,Bounds.Width-46,rowHeight-2));
+                var pointY=y+rowHeight-10;
+                c.DrawLine(new Pen(Palette.Border,.7),new Point(LabelWidth+8,pointY),new Point(Bounds.Width-22,pointY));
+                if(Selected is {} cursor && cursor.time>=Start&&cursor.time<=End)
+                    c.DrawLine(new Pen(Palette.Selection,1),new Point(X(cursor.time),pointY-9),new Point(X(cursor.time),pointY+9));
                 using(c.PushClip(new Rect(26,y+1,LabelWidth-32,rowHeight)))
                 {
                     Text(c,row.Name,28,y+4,brush,12);
-                    Text(c,$"{row.Records.Length} 条记录",28,y+25,size:10);
+                    Text(c,$"{row.Records.Length} 条记录"+(samples.Length==0?" · 本窗无新"+(last.kind is "aisac" or "selector"?"设置":"记录"):""),28,y+25,size:10);
                 }
-                if(row.TargetLabel.Length>0)
-                {
-                    var owners=RelatedOwners(row);double left=LabelWidth+10,width=Math.Max(60,Math.Min(370,PlotWidth-30));
-                    if(owners.Length==1)DrawRelatedCue(c,owners[0],left,y+22,width);
-                    else if(owners.Length>1) {
-                        var key="related:"+row.Key;
-                        Text(c,(_expanded.Contains(key)?"▾ ":"▸ ")+$"关联声音 · {owners.Length} 个",left,y+26,Palette.Voice,11);
-                        _expandHits.Add((new Rect(left,y+22,width,28),key));
-                        if(_expanded.Contains(key))for(int ownerIndex=0;ownerIndex<owners.Length;ownerIndex++)
-                            DrawRelatedCue(c,owners[ownerIndex],left+10,y+54+ownerIndex*32,width-10);
-                    }
+                var owners=RelatedOwners(row);
+                double left=LabelWidth+10,width=Math.Max(60,Math.Min(370,PlotWidth-30));
+                if(owners.Length==1)DrawRelatedCue(c,owners[0],left,y+22,width);
+                else if(owners.Length>1) {
+                    var key="related:"+row.Key;
+                    using(c.PushClip(new Rect(left,y+22,width,28)))
+                        Text(c,(_expanded.Contains(key)?"▾ ":"▸ ")+$"写入时最近 · {owners[0].Name}（共 {owners.Length} 个）",left,y+26,Palette.Voice,11);
+                    _expandHits.Add((new Rect(left,y+22,width,28),key));
+                    if(_expanded.Contains(key))for(int ownerIndex=0;ownerIndex<owners.Length;ownerIndex++)
+                        DrawRelatedCue(c,owners[ownerIndex],left+10,y+54+ownerIndex*32,width-10);
                 }
+                else if(row.Kind is "aisac" or "selector" && !last.objectId.StartsWith("category",StringComparison.OrdinalIgnoreCase))
+                    Text(c,row.EmptyRelationshipLabel,left,y+30,size:10);
                 using(c.PushClip(new Rect(LabelWidth+8,y+1,Math.Max(0,compact?PlotWidth-16:PlotWidth-220),22)))
                     Text(c,(last.kind is "aisac" or "selector"?"最近设置：":"最近记录：")+ControlPresentation.Value(last),LabelWidth+10,y+5,Palette.Text,12);
-                if(!compact)Text(c,Stamp(last.time),Math.Max(LabelWidth+180,Bounds.Width-202),y+6,size:10);
+                if(!compact)Text(c,DisplayStamp(last.time),Math.Max(LabelWidth+180,Bounds.Width-202),y+6,size:10);
                 _hits.Add((new Rect(24,y,Math.Max(0,Bounds.Width-44),rowHeight),last));
                 // Discrete settings and callbacks; no interpolated curve or mixed parent value.
                 foreach(var e in samples)
                 {
-                    var x=X(e.time);var pointBrush=e.kind=="sequence"?Palette.SequenceTag(e.name):brush;c.DrawEllipse(e.estimatedTime?null:pointBrush,e.estimatedTime?new Pen(pointBrush,1.3):null,new Point(x,y+48),3,3);
-                    if(IsSelected(e))c.DrawEllipse(null,new Pen(Palette.Selection,2),new Point(x,y+48),6,6);
-                    _hits.Add((new Rect(x-5,y+38,10,20),e));
+                    var x=X(e.time);var pointBrush=e.kind=="sequence"?Palette.SequenceTag(e.name):brush;c.DrawEllipse(e.estimatedTime?null:pointBrush,e.estimatedTime?new Pen(pointBrush,1.3):null,new Point(x,pointY),3,3);
+                    if(IsSelected(e))c.DrawEllipse(null,new Pen(Palette.Selection,2),new Point(x,pointY),6,6);
+                    _hits.Add((new Rect(x-5,pointY-8,10,16),e));
                 }
-                if(samples.Length==0 && row.TargetLabel.Length==0)Text(c,"此时间窗无新记录",LabelWidth+10,y+30,size:10);
+
                 y+=rowHeight;
             }
         }
         _contentHeight=y+_vertical-contentTop;
     }
-    private PlaybackGroup[] RelatedOwners(ControlRow row)=>row.TargetLabel.Length==0?[]:
-        PlaybackGroups().Where(p=>p.PlayerId==row.Latest.objectId&&AssociationPresentation.ActiveAt(p,End)).OrderBy(p=>p.Request?.time).ToArray();
-    private double ControlRowHeight(ControlRow row)=>54+(_expanded.Contains("related:"+row.Key)?RelatedOwners(row).Length*32:0);
+    private PlaybackGroup[] RelatedOwners(ControlRow row)=>row.SettingOwners;
+    private double ControlRowHeight(ControlRow row)=>74+(_expanded.Contains("related:"+row.Key)?RelatedOwners(row).Length*32:0);
     private void DrawRelatedCue(DrawingContext c,PlaybackGroup owner,double x,double y,double width)
     {
         _relatedCueBounds.Add(new Rect(x,y,width,28));
         c.FillRectangle(Palette.Panel,new Rect(x,y,width,28));
         var identity=ControlLabels.Get("播放实例",JsonSerializer.Serialize(new[]{owner.Request?.session??"",owner.Id})).Replace("播放实例 ","");
         double idWidth=Math.Max(32,identity.Length*7),buttonX=x+width-28;
-        using(c.PushClip(new Rect(x,y,Math.Max(0,width-idWidth-36),22)))Text(c,owner.Name,x,y+4,Palette.Text,11);
+        using(c.PushClip(new Rect(x,y,Math.Max(0,width-idWidth-36),22)))Text(c,"设置时 · "+owner.Name,x,y+4,Palette.Text,11);
         Text(c,identity,buttonX-idWidth-4,y+4,Palette.Muted,11);
-        using(c.PushTransform(Matrix.CreateScale(.65,.65)*Matrix.CreateTranslation(buttonX+6,y+5)))
-            c.DrawGeometry(null,new Pen(Palette.Muted,1.6),Geometry.Parse(VisualLanguage.Path(IconKind.Locate)));
-        if(AssociationPresentation.Anchor(owner) is {} target)_links.Add((new Rect(buttonX,y,28,28),target));
+        if(AssociationPresentation.Anchor(owner) is {} target && Events.Any(e=>e.session==target.session&&e.seq==target.seq))
+        {
+            var buttonRect=new Rect(buttonX,y,28,28);
+            var hovered=_hoverLinkRect==buttonRect;
+            if(hovered)c.FillRectangle(Palette.Hover,buttonRect);
+            c.DrawRectangle(null,new Pen(hovered?Palette.Selection:Palette.Border,hovered?1.2:.8),buttonRect,4,4);
+            using(c.PushTransform(Matrix.CreateScale(.65,.65)*Matrix.CreateTranslation(buttonX+6,y+5)))
+                c.DrawGeometry(null,new Pen(hovered?Palette.Selection:Palette.Muted,1.6),Geometry.Parse(VisualLanguage.Path(IconKind.Locate)));
+            _links.Add((buttonRect,target));
+        }
+        else Text(c,"历史",buttonX-1,y+5,Palette.Muted,10);
     }
     private void DrawToggle(DrawingContext c,Rect rect,string label,bool enabled,string key,IBrush brush)
     {
@@ -520,15 +653,14 @@ public sealed class TimelineControl : Control
             y+=12;
         }
         _contentHeight=y+_vertical;
-        var maxScroll=Math.Max(0,_contentHeight+28-Bounds.Height);
-        if(_vertical>maxScroll){_vertical=maxScroll;Avalonia.Threading.Dispatcher.UIThread.Post(InvalidateVisual);}
+        if(_vertical>ResourcesMaxScroll){_vertical=ResourcesMaxScroll;Avalonia.Threading.Dispatcher.UIThread.Post(InvalidateVisual);}
     }
     private void DrawMixing(DrawingContext c)
     {
         var buses=MixingPresentation.Latest(Events,End);
         _busCount=buses.Length;_busChannels=buses.Sum(b=>b.Channels.Length);
         Text(c,"混音 / BUS METER",22,20,Palette.Text,16);
-        Text(c,"每 Bus 一行 · Peak / RMS：分别取返回槽位最大值（概览，非混合信号）",22,50,Palette.Voice,11);
+        Text(c,BusHistoryIsSparse ? "事件后 Bus 快照 · 仅代表采样时点，不是连续电平" : "每 Bus 一行 · Peak / RMS：分别取返回槽位最大值（概览，非混合信号）",22,50,Palette.Voice,11);
         if(buses.Length==0){_contentHeight=0;_vertical=0;Empty(c,"Bus 电平尚未提供","未观察到的路由与效果参数不会补造。请确认来源已启用相应监控。");return;}
         double contentHeight=buses.Sum(b=>42+(_expanded.Contains("bus:"+b.Event.objectId)?b.Channels.Length*40:0));
         _contentHeight=contentHeight;_vertical=Math.Clamp(_vertical,0,MixingMaxScroll);

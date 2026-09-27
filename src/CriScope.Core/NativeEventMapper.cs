@@ -62,6 +62,10 @@ public sealed class NativeEventMapper(string session)
         }
         string playback = Has("ExPlaybackId_unique64") ? $"playback:{segment}:" + S("ExPlaybackId_unique64") : $"playback-id:{segment}:" + S("CriAtomExPlaybackId");
         string player = S("CriAtomExPlayerHn");
+        // A native handle may be reused within one logging segment. A prior Player's
+        // selected Cue must never supply the name of the next Player's playback.
+        if (player.Length > 0 && f is ("ExPlayer_Create" or "ExPlayer_Create_Success" or "ExPlayer_Destroy"))
+            playerCues.Remove(player);
         string raw = JsonSerializer.Serialize(new { function = f, functionId = packet.FunctionId, timeMicroseconds = packet.TimeMicroseconds,
             command = packet.Command, payloadHex = packet.PayloadHex, parameters = p.Select(v => new { id = v.Id, name = v.Name, value = v.Value }) });
         WireEvent E(string kind, string name, string id = "", double value = 0, string entity = "", string parent = "", string detail = "") => new()

@@ -1,12 +1,14 @@
+param([ValidatePattern('^[A-Za-z0-9][A-Za-z0-9-]*$')][string]$OutputName = 'CriScope-win-x64')
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $projectRoot 'src\CriScope.App\CriScope.App.csproj'
-$output = Join-Path $projectRoot 'artifacts\CriScope-win-x64'
-$archive = Join-Path $projectRoot 'artifacts\CriScope-win-x64.zip'
+$output = Join-Path $projectRoot "artifacts\$OutputName"
+$archive = Join-Path $projectRoot "artifacts\$OutputName.zip"
 
 & (Join-Path $PSScriptRoot 'dotnet.ps1') publish $project -c Release -r win-x64 --self-contained true '-p:PublishSingleFile=false' -o $output
 if ($LASTEXITCODE -ne 0) { throw "发布失败，退出码：$LASTEXITCODE" }
 if (-not (Test-Path -LiteralPath (Join-Path $output 'CriScope.exe'))) { throw '发布结果缺少 CriScope.exe。' }
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README-接入.txt') -Destination (Join-Path $output 'README-接入.txt') -Force
 
 # 重复发布时不能把 EXE 产生的本地录制和日志打进公共发行包。
 Add-Type -AssemblyName System.IO.Compression
@@ -15,7 +17,7 @@ try {
     foreach ($file in Get-ChildItem -LiteralPath $output -File -Recurse) {
         $relative = $file.FullName.Substring($output.Length + 1)
         if ($relative -match '(^|[\\/])\.local([\\/]|$)' -or $file.Extension -in @('.criscope','.log')) { continue }
-        $entry = $zip.CreateEntry(('CriScope-win-x64/' + $relative.Replace('\', '/')), [IO.Compression.CompressionLevel]::Optimal)
+        $entry = $zip.CreateEntry(($OutputName + '/' + $relative.Replace('\', '/')), [IO.Compression.CompressionLevel]::Optimal)
         $source = [IO.File]::OpenRead($file.FullName)
         $destination = $entry.Open()
         try { $source.CopyTo($destination) }

@@ -42,6 +42,14 @@ legacy.raw="{";Check(!EventSemantics.IsPlaybackEnd(legacy)&&EventSemantics.Cause
 Check(EventSemantics.IsPlaybackReleased(new(){entity="cue",detail="CRI 播放实例释放"}),"Legacy release no longer supported");
 Console.WriteLine("PASS structured cue lifecycle, limit cause, stopped/released distinction and legacy evidence compatibility");
 
+var reusedPlayerMapper=new NativeEventMapper("player-reuse");
+reusedPlayerMapper.Map(P("StartLogging",1000000)).ToArray();
+reusedPlayerMapper.Map(P("ExPlayer_SetCueName",1100000,N("CriAtomExPlayerHn","0x1"),N("cue_name","Old Cue"))).ToArray();
+reusedPlayerMapper.Map(P("ExPlayer_Destroy",1200000,N("CriAtomExPlayerHn","0x1"))).ToArray();
+var reusedRequest=reusedPlayerMapper.Map(P("ExPlaybackId",1300000,N("ExPlaybackId_unique64",168UL),N("CriAtomExPlayerHn","0x1"))).Single();
+Check(reusedRequest.name=="Cue","Reused Player handle borrowed the previous Player's selected Cue");
+Console.WriteLine("PASS reused Player handle does not carry stale selected Cue");
+
 var categoryMapper=new NativeEventMapper("category-test");
 categoryMapper.Map(P("StartLogging",1000000)).ToArray();
 categoryMapper.Map(P("ExCategoryConfig",1000000,N("Index",23),N("CategoryName","Music"))).ToArray();

@@ -26,6 +26,15 @@ static byte[] Native(ulong micros)
     BinaryPrimitives.WriteUInt64BigEndian(bytes.AsSpan(8),micros);BinaryPrimitives.WriteUInt16BigEndian(bytes.AsSpan(16),2138);
     BinaryPrimitives.WriteUInt16BigEndian(bytes.AsSpan(32),137);BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(34),3);return bytes;
 }
+static byte[] StartNative(ulong micros)
+{
+    byte[] version=Encoding.UTF8.GetBytes("2.28.272-0.5");
+    var bytes=new byte[36+version.Length];BinaryPrimitives.WriteUInt32BigEndian(bytes,(uint)bytes.Length);
+    BinaryPrimitives.WriteUInt16BigEndian(bytes.AsSpan(4),31);bytes[6]=8;
+    BinaryPrimitives.WriteUInt64BigEndian(bytes.AsSpan(8),micros);BinaryPrimitives.WriteUInt16BigEndian(bytes.AsSpan(16),2141);
+    BinaryPrimitives.WriteUInt16BigEndian(bytes.AsSpan(32),437);
+    BinaryPrimitives.WriteUInt16BigEndian(bytes.AsSpan(34),(ushort)version.Length);version.CopyTo(bytes,36);return bytes;
+}
 static byte[] Listener(ulong micros,bool complete)
 {
     using var payload=new MemoryStream();
@@ -39,6 +48,16 @@ static byte[] Listener(ulong micros,bool complete)
     BinaryPrimitives.WriteUInt64BigEndian(result.AsSpan(8),micros);BinaryPrimitives.WriteUInt16BigEndian(result.AsSpan(16),2144);
     payload.ToArray().CopyTo(result,32);return result;
 }
+static byte[] ListenerSetter(ulong micros,ushort function,ushort parameter,params float[] values)
+{
+    var result=new byte[44+values.Length*4];BinaryPrimitives.WriteUInt32BigEndian(result,(uint)result.Length);
+    BinaryPrimitives.WriteUInt16BigEndian(result.AsSpan(4),31);result[6]=8;
+    BinaryPrimitives.WriteUInt64BigEndian(result.AsSpan(8),micros);BinaryPrimitives.WriteUInt16BigEndian(result.AsSpan(16),function);
+    BinaryPrimitives.WriteUInt16BigEndian(result.AsSpan(32),50);BinaryPrimitives.WriteUInt64BigEndian(result.AsSpan(34),1);
+    BinaryPrimitives.WriteUInt16BigEndian(result.AsSpan(42),parameter);
+    for(int i=0;i<values.Length;i++) BinaryPrimitives.WriteInt32BigEndian(result.AsSpan(44+i*4),BitConverter.SingleToInt32Bits(values[i]));
+    return result;
+}
 static async Task Send(TcpClient client,byte[] data,bool fragmented=false)
 {
     var stream=client.GetStream();int step=fragmented?3:data.Length;
@@ -51,11 +70,15 @@ static async Task Closed(TcpClient client)
 
 var reserve=new TcpListener(IPAddress.Loopback,0);reserve.Start();int port=((IPEndPoint)reserve.LocalEndpoint).Port;reserve.Stop();
 Check(port!=2002&&port!=18961,"Test must not use production ports");
-using var collector=new Collector(Path.GetTempPath());collector.Start(port);
+var recordingDirectory=Path.Combine(Path.GetTempPath(),"CriScope-bridge-tests-"+Guid.NewGuid().ToString("N"));
+using var collector=new Collector(recordingDirectory);collector.Start(port);
 string a=Guid.NewGuid().ToString(),b=Guid.NewGuid().ToString(),captureA=Guid.NewGuid().ToString(),captureB=Guid.NewGuid().ToString();
 using var first=await Connect(port,a,captureA,"machine-A");using var second=await Connect(port,b,captureB,"machine-B");
 await Until(()=>collector.Sessions.Length==4,"Two clients did not produce four isolated channels");
 Session Find(string client,string capture,string channel)=>collector.Sessions.Single(s=>s.ClientId==client&&s.CaptureId==capture&&s.Channel==channel);
+Check(Find(a,captureA,"native").Recording&&Find(a,captureA,"sdk").Recording&&
+      Find(a,captureA,"native").RecordingPath!=Find(a,captureA,"sdk").RecordingPath,
+      "Valid bridge handshake must automatically create separate native and SDK logs");
 await Send(first,Frame(1,1,1,1200000000,Native(7000000)),true);
 await Send(first,Frame(2,2,0,1200100000,Json(new WireEvent{kind="metric",time=1000,name="Atom内存",value=1024})),true);
 await Send(second,Frame(2,1,0,8000000,Json(new WireEvent{kind="metric",time=6,name="Atom内存",value=2048})),true);
@@ -74,6 +97,8 @@ await Until(()=>Find(a,captureA,"sdk").Dropped==9,"Gap was not attributed to SDK
 Check(Find(a,captureA,"native").Dropped==0,"SDK gap polluted native channel");
 string captureNew=Guid.NewGuid().ToString();using var replacement=await Connect(port,a,captureNew,"machine-A");
 await Until(()=>collector.Sessions.Length==6&&!Find(a,captureA,"sdk").Connected,"New capture did not isolate/close prior connection");
+Check(!Find(a,captureA,"sdk").Recording&&File.Exists(Find(a,captureA,"sdk").RecordingPath),
+      "Replaced capture must close its physical log");
 await Send(replacement,Frame(2,1,0,1000000,Json(new WireEvent{kind="metric",time=.5,name="New capture",value=3})));
 await Until(()=>Find(a,captureNew,"sdk").Total==1,"Reconnect did not reset transport sequence");
 Check(Find(a,captureA,"sdk").Total==2&&Find(b,captureB,"sdk").Connected,"Reconnect modified unrelated session");
@@ -98,24 +123,32 @@ await Until(()=>Find(b,captureB,"native").Total==2,"Bad native payload desynchro
 Check(Find(b,captureB,"native").Dropped==1,"Native decode failure not reported as gap");
 await Send(second,Frame(1,4,1,9000002,Native(8000001)));await Closed(second);
 await Until(()=>!Find(b,captureB,"native").Connected,"Native epoch regression silently accepted");
-await Send(replacement,Frame(1,2,1,10000000,Listener(1000000,true)));
+await Send(replacement,Frame(1,2,1,10000000,StartNative(900000)));
+await Send(replacement,Frame(1,3,1,10000001,ListenerSetter(1000000,2348,164,1,2,3)));
+await Send(replacement,Frame(1,4,1,10000002,ListenerSetter(1000001,2352,168,11,12,13)));
+await Send(replacement,Frame(1,5,1,10000003,ListenerSetter(1000002,2353,173,.5f)));
+await Send(replacement,Frame(1,6,1,10000004,Listener(1000003,false)));
 await Until(()=>Find(a,captureNew,"native").Snapshot().Any(e=>e.entity=="distance-listener"),"Complete listener did not derive a distance point");
-await Send(replacement,Frame(1,3,1,10000001,[1,2,3]));
-await Send(replacement,Frame(1,4,1,10000002,Listener(2000000,false)));
+await Send(replacement,Frame(1,7,1,10000005,[1,2,3]));
+await Send(replacement,Frame(1,8,1,10000006,Listener(2000000,false)));
 await Until(()=>Find(a,captureNew,"native").Snapshot().Any(e=>e.entity=="listener"&&e.time==2),"Post-gap listener not processed");
 Check(!Find(a,captureNew,"native").Snapshot().Any(e=>e.entity=="distance-listener"&&e.time==2),"Bad native frame retained old focus cache and fabricated a derived point");
 Check(Find(a,captureNew,"native").Snapshot().All(e=>e.epoch==1),"Decode recovery changed native identity epoch");
-await Send(replacement,Frame(1,5,1,10000003,Listener(3000000,true)));
-await Send(replacement,Frame(4,6,1,10000004,Json(new{count=1,channel=1,reason="native queue gap"})));
-await Send(replacement,Frame(1,7,1,10000005,Listener(4000000,false)));
+await Send(replacement,Frame(1,9,1,10000007,Listener(3000000,true)));
+await Send(replacement,Frame(4,10,1,10000008,Json(new{count=1,channel=1,reason="native queue gap"})));
+await Send(replacement,Frame(1,11,1,10000009,Listener(4000000,false)));
 await Until(()=>Find(a,captureNew,"native").Snapshot().Any(e=>e.entity=="listener"&&e.time==4),"Explicit-gap recovery not processed");
 Check(!Find(a,captureNew,"native").Snapshot().Any(e=>e.entity=="distance-listener"&&e.time==4),"Explicit native gap retained cached focus");
 // Stop while one socket has only half a greeting and another is blocked mid-frame.
 using var halfGreeting=new TcpClient();await halfGreeting.ConnectAsync(IPAddress.Loopback,port);await Send(halfGreeting,"CS"u8.ToArray());
-byte[] unfinished=Frame(2,8,0,10000006,[]);BinaryPrimitives.WriteInt32BigEndian(unfinished,1024);await Send(replacement,unfinished);
+byte[] unfinished=Frame(2,12,0,10000010,[]);BinaryPrimitives.WriteInt32BigEndian(unfinished,1024);await Send(replacement,unfinished);
 var watch=System.Diagnostics.Stopwatch.StartNew();collector.Dispose();watch.Stop();
 Check(watch.Elapsed<TimeSpan.FromSeconds(1),"Collector.Dispose blocked on bridge reads");
 await Closed(halfGreeting);await Closed(replacement);
 await Until(()=>collector.Sessions.All(s=>!s.Connected),"Cancelled bridge sessions remain connected");
+await Until(()=>collector.Sessions.All(s=>!s.Recording),"Cancelled bridge logs were not sealed");
+Check(collector.Sessions.All(s=>!s.Recording&&File.Exists(s.RecordingPath)),
+      "Collector shutdown must seal both channel logs");
+Directory.Delete(recordingDirectory,true);
 Console.WriteLine("PASS CSB3 TCP fragmentation, client/machine isolation, capture reconnect, independent clocks and sequences, explicit gaps, malformed-frame disconnect isolation, native recovery and epoch regression");
 Console.WriteLine("PASS decode/transport gaps invalidate mapper cache without epoch changes; partial greeting/frame disposal closes promptly");
