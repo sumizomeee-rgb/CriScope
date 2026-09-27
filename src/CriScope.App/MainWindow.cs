@@ -772,7 +772,7 @@ public sealed partial class MainWindow : Window
         _timeline.AssociationEvents = _snapshot;
         _timeline.BusHistoryIsSparse = _session is { IsReplay: true, BusSamplesAreEventTriggered: true };
         _timeline.Events = filtered;
-        _timeline.Discontinuities = _snapshot.Where(e => e.kind == "gap" || e.kind == "state" && e.value <= 0).ToArray();
+        _timeline.Discontinuities = _snapshot.Where(e => e.kind == "gap" || e.entity == "capture-segment" || e.kind == "state" && e.value <= 0).ToArray();
         UpdateEventLog();
         _timeline.InvalidateVisual();
     }

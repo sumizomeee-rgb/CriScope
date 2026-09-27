@@ -306,6 +306,26 @@ public sealed class SmokeApp : Application
                     var pendingHits=(List<(Rect rect,WireEvent item)>)typeof(TimelineControl).GetField("_hits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(Field<TimelineControl>("_timeline"))!;
                     Check(!pendingHits.Any(h=>h.item.kind=="request" && h.rect.X>=214),"真实绘制不把窗口前的孤立请求画成跨窗口长条");
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/request-only.png"),requestPng);
+                    var boundarySession=Meta(Guid.NewGuid().ToString("N"),"native","capture-boundary");sessions[boundarySession.Id]=boundarySession;
+                    var boundaryRequest=new WireEvent {session=boundarySession.Id,source="cri-native",seq=1,kind="request",entity="cue",objectId="boundary-playback",name="g_ui_default",time=1};
+                    var boundaryVoice=new WireEvent {session=boundarySession.Id,source="cri-native",seq=2,kind="play",entity="voice",objectId="boundary-voice",parentId=boundaryRequest.objectId,name="g_ui_default",time=1.1};
+                    var captureBoundary=new WireEvent {session=boundarySession.Id,source="cri-native",seq=3,kind="log",entity="capture-segment",name="原生采集开始",time=3};
+                    boundarySession.Accept(boundaryRequest);boundarySession.Accept(boundaryVoice);boundarySession.Accept(captureBoundary);
+                    boundarySession.Accept(new WireEvent {session=boundarySession.Id,source="cri-native",seq=4,kind="metric",name="CPU",time=20,value=1});
+                    var interruptedGroup=PlaybackPresentation.Group(boundarySession.ViewSnapshot(),20).Single();
+                    Check(interruptedGroup.HasEvidenceGap&&interruptedGroup.StatusLabel.Contains("状态待确认")&&interruptedGroup.DurationAt(20)==null,
+                        "采集重启后旧 Voice 的结束未知，不计算到窗口末端的持续时长");
+                    Select(boundarySession);window.ApplyUiAction("workspace","Timeline");window.ApplyUiAction("range","0:20");await Task.Delay(100);
+                    var boundaryTimeline=Field<TimelineControl>("_timeline");
+                    Check(boundaryTimeline.Discontinuities.Contains(captureBoundary),"采集段边界传入时间轴的区间裁切证据");
+                    window.CapturePng("workspace");
+                    var boundaryHits=(List<(Rect rect,WireEvent item)>)typeof(TimelineControl).GetField("_hits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(boundaryTimeline)!;
+                    var voiceBar=boundaryHits.Single(h=>ReferenceEquals(h.item,boundaryVoice));
+                    var boundaryX=214+(captureBoundary.time-boundaryTimeline.Start)/boundaryTimeline.ViewSpan*Math.Max(40,boundaryTimeline.Bounds.Width-214-22);
+                    Check(Math.Abs(voiceBar.rect.Right-boundaryX)<2,"旧 Voice 的紫色区间在采集段边界截断，不延伸到当前窗口末端");
+                    window.ApplyUiAction("range","10:20");window.CapturePng("workspace");
+                    Check(!boundaryHits.Any(h=>h.item.objectId==boundaryRequest.objectId||h.item.objectId==boundaryVoice.objectId),
+                        "采集中断前的旧播放行不占据后续历史范围");
                     var carry = CreateSession(1003, "Long BGM"); sessions[carry.Id] = carry;
                     carry.Accept(new WireEvent { kind = "aisac", source = "cri-native", session = carry.Id, seq = 2, time = 2, name = "Distance", objectId = "player", entity = "player", value = .25 });
                     carry.Accept(new WireEvent { kind = "metric", source = "cri-native", session = carry.Id, seq = 3, time = 200, name = "CPU", value = 1 });

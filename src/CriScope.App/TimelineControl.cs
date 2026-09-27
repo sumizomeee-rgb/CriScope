@@ -383,7 +383,8 @@ public sealed class TimelineControl : Control
         using var clip=c.PushClip(new Rect(0,68,Bounds.Width,Math.Max(0,Bounds.Height-96)));
         foreach(var group in groups)
         {
-            if(group.End is {} ended&&ended.time<Start)continue;
+            var observedEnd=group.End?.time??group.Discontinuity?.time;
+            if(observedEnd is {} ended&&ended<Start)continue;
             var anchor=group.Request??group.Voices.SelectMany(v=>v).FirstOrDefault()??group.End;
             if(anchor==null)continue;
             var key="playback:"+group.Id;bool expanded=_expanded.Contains(key);
@@ -461,7 +462,9 @@ public sealed class TimelineControl : Control
             var stop=voiceStop;
             if(instanceEnd!=null&&(stop==null||instanceEnd.time<stop.time))stop=instanceEnd;
             var end=Math.Min(stop?.time??End,End);
-            var gap=Discontinuities.Where(d=>d.time>begin.time&&d.time<end).MinBy(d=>d.time);
+            var gap=Discontinuities.Where(d=>(d.session.Length==0||begin.session.Length==0||d.session==begin.session)
+                &&(d.channel.Length==0||begin.channel.Length==0||d.channel==begin.channel)
+                &&(d.time>begin.time||d.time==begin.time&&d.seq>begin.seq)&&d.time<end).MinBy(d=>d.time);
             if(gap!=null){end=gap.time;stop=null;}
             var left=Math.Max(LabelWidth,X(begin.time));var right=Math.Min(LabelWidth+PlotWidth,X(end));
             if(right<left)return;
