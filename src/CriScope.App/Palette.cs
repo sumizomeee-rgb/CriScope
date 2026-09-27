@@ -1,15 +1,21 @@
+using System;
+using System.Collections.Generic;
 using Avalonia.Media;
 
 namespace CriScope.App;
 
 internal sealed class Palette(bool light)
 {
+    private readonly Dictionary<string,IBrush> _categoryBrushes=new(StringComparer.Ordinal);
+    private static readonly string[] LightCategoryColors=["#B35D44", "#477C99", "#8C678F", "#5E8357", "#AD7D33", "#538282", "#A55B72", "#6B76A2", "#877747", "#63866C", "#A06257", "#6C7E9A"];
+    private static readonly string[] DarkCategoryColors=["#E6A18B", "#83BEDB", "#C0A2CE", "#9EC58B", "#E0BB73", "#8DCBC9", "#DCA0B6", "#A4B0DA", "#C9BF82", "#A2C9AE", "#D7A69B", "#A6BDDE"];
     public bool Light { get; } = light;
     public IBrush Shell => B(Light ? "#E8E3D9" : "#0A0D10");
     public IBrush Panel => B(Light ? "#F1EEE7" : "#11161C");
     public IBrush Canvas => B(Light ? "#FBFAF6" : "#0C1015");
     public IBrush Alternate => B(Light ? "#F5F2EB" : "#10161D");
     public IBrush Border => B(Light ? "#D6D2CA" : "#29313B");
+    public IBrush TimelineGrid => B(Light ? "#E9E6DF" : "#1A222B");
     public IBrush Text => B(Light ? "#282D34" : "#E0E5EA");
     public IBrush Muted => B(Light ? "#69717A" : "#909CA9");
     public IBrush Signal => B(Light ? "#985716" : "#D8A56D");
@@ -41,6 +47,14 @@ internal sealed class Palette(bool light)
         string[] colors = Light ? ["#8D536E", "#6E7141", "#427D8E", "#895C40", "#67588F", "#3D7760", "#90633F", "#6B6987"]
             : ["#D9A0BC", "#B8BE83", "#8EC1CC", "#D6AC8E", "#B5A6D3", "#9FC3AD", "#D1B58E", "#ADAFCB"];
         return B(colors[hash % colors.Length]);
+    }
+    public IBrush Category(string id)
+    {
+        if(_categoryBrushes.TryGetValue(id,out var cached))return cached;
+        // Use the visible Category name when available to keep its hue across sessions and filters.
+        uint hash = 2166136261; foreach(char c in id){hash ^= c;hash *= 16777619;}
+        var colors=Light?LightCategoryColors:DarkCategoryColors;
+        return _categoryBrushes[id]=B(colors[hash % colors.Length]);
     }
     private static IBrush B(string color) => Brush.Parse(color);
 }

@@ -117,16 +117,63 @@ public sealed class SmokeApp : Application
                         &&ToolTip.GetTip(AxisMode())?.ToString()?.StartsWith("当前：钟表时间")==true
                         &&ToolTip.GetTip(AxisMode())?.ToString()?.Contains("相对时间")==true,
                         "时间轴默认钟表时间，使用 SVG 图标切换并以提示说明另一模式");
-                    var axisPosition=AxisMode().TranslatePoint(new Point(0,0),window)!.Value;
-                    var filterPosition=Field<TextBox>("_filter").TranslatePoint(new Point(0,0),window)!.Value;
-                    var timelinePosition=axisTimeline.TranslatePoint(new Point(0,0),window)!.Value;
                     var axisScreenshot=Path.GetFullPath(".local/ui-check/axis-mode-aligned.png");
                     Directory.CreateDirectory(Path.GetDirectoryName(axisScreenshot)!);
                     File.WriteAllBytes(axisScreenshot,window.CapturePng("window"));
-                    Check(axisPosition.Y-timelinePosition.Y>=2
-                        &&axisPosition.Y-timelinePosition.Y+AxisMode().Bounds.Height<=40
-                        &&AxisMode().Bounds.Width==AxisMode().Bounds.Height,
-                        $"时间轴切换图标位于刻度行且为正方形（轴 {axisPosition}，筛选 {filterPosition}，画布 {timelinePosition}，尺寸 {AxisMode().Bounds.Size}）");
+                    void CheckAxisLayout(string caseName)
+                    {
+                        var button=AxisMode();
+                        var toolbar=(Grid)button.Parent!;
+                        var range=Field<ComboBox>("_windowRange");
+                        var axisPosition=button.TranslatePoint(new Point(0,0),window)!.Value;
+                        var toolbarPosition=toolbar.TranslatePoint(new Point(0,0),window)!.Value;
+                        var rangePosition=range.TranslatePoint(new Point(0,0),window)!.Value;
+                        var timelinePosition=Field<TimelineControl>("_timeline").TranslatePoint(new Point(0,0),window)!.Value;
+                        Check(button.Bounds.Width==32&&button.Bounds.Height==32
+                            &&axisPosition.X>=rangePosition.X+range.Bounds.Width+2
+                            &&axisPosition.X+button.Bounds.Width<=toolbarPosition.X+toolbar.Bounds.Width+.5
+                            &&axisPosition.Y>=toolbarPosition.Y-.5
+                            &&axisPosition.Y+button.Bounds.Height<=toolbarPosition.Y+toolbar.Bounds.Height+.5
+                            &&axisPosition.Y+button.Bounds.Height<timelinePosition.Y,
+                            $"{caseName}：时间切换按钮完整位于工具栏内，避开范围选择和画布（按钮 {axisPosition}，工具栏 {toolbarPosition}/{toolbar.Bounds.Size}，画布 {timelinePosition}）");
+                    }
+                    CheckAxisLayout("标准窗口");
+                    var inspectorBefore=State().GetProperty("inspector").GetBoolean();
+                    if(inspectorBefore) Click(Field<Button>("_detailsToggle"));
+                    window.Width=window.MinWidth;await Task.Delay(220);
+                    CheckAxisLayout("最窄窗口");
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/axis-mode-narrow.png"),window.CapturePng("window"));
+                    Click(Field<Button>("_detailsToggle"));await Task.Delay(260);
+                    CheckAxisLayout("最窄窗口打开详情");
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/axis-mode-narrow-details.png"),window.CapturePng("window"));
+                    var categoryIdField=typeof(MainWindow).GetField("_categoryId",BindingFlags.Instance|BindingFlags.NonPublic)!;
+                    var categoryNameField=typeof(MainWindow).GetField("_categoryName",BindingFlags.Instance|BindingFlags.NonPublic)!;
+                    categoryIdField.SetValue(window,"long-category");
+                    categoryNameField.SetValue(window,"Long_Category_Name_abcdefghijklmnopqrstuvwxyz");
+                    typeof(MainWindow).GetMethod("UpdateEvents",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,null);
+                    await Task.Delay(100);
+                    var chip=Field<Button>("_categoryChip");
+                    var filter=Field<TextBox>("_filter");
+                    var chipPosition=chip.TranslatePoint(new Point(0,0),window)!.Value;
+                    var filterPosition=filter.TranslatePoint(new Point(0,0),window)!.Value;
+                    var fit=window.GetVisualDescendants().OfType<Button>().Single(button=>ToolTip.GetTip(button)?.ToString()?.StartsWith("一次性缩放")==true);
+                    var fitPosition=fit.TranslatePoint(new Point(0,0),window)!.Value;
+                    var bar=(Grid)AxisMode().Parent!;
+                    var barPosition=bar.TranslatePoint(new Point(0,0),window)!.Value;
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/axis-mode-narrow-category.png"),window.CapturePng("window"));
+                    Check(chip.IsVisible&&chip.Bounds.Width<=150
+                        &&chip.Content is StackPanel chipContent&&chipContent.Children.OfType<TextBlock>().Last().Text=="×"
+                        &&ToolTip.GetTip(chip)?.ToString()?.Contains("Long_Category_Name_abcdefghijklmnopqrstuvwxyz")==true
+                        &&chipPosition.X+chip.Bounds.Width+6<=filterPosition.X+.5&&filter.Bounds.Width>=120
+                        &&fitPosition.X+fit.Bounds.Width<=barPosition.X+bar.Bounds.Width+.5,
+                        $"长 Category 在最窄抽屉窗口可省略，清除键、搜索框和工具栏末端不越界（chip {chipPosition}/{chip.Bounds.Size}，filter {filterPosition}/{filter.Bounds.Size}，fit {fitPosition}/{fit.Bounds.Size}，bar {barPosition}/{bar.Bounds.Size}）");
+                    categoryIdField.SetValue(window,"");categoryNameField.SetValue(window,"");
+                    typeof(MainWindow).GetMethod("UpdateEvents",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,null);
+                    window.Width=1100;await Task.Delay(220);
+                    CheckAxisLayout("中等窗口打开详情");
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/axis-mode-medium-details.png"),window.CapturePng("window"));
+                    Click(Field<Button>("_detailsToggle"));window.Width=1480;await Task.Delay(220);
+                    if(inspectorBefore) Click(Field<Button>("_detailsToggle"));
                     AxisMode().IsChecked=false;
                     Check(!axisTimeline.ShowingWallTime&&axisTimeline.DisplayStamp(a.TimeOrigin)==axisTimeline.Stamp(a.TimeOrigin)
                         &&Field<TextBlock>("_range").Text!.Contains("采集相对时间")
@@ -224,7 +271,9 @@ public sealed class SmokeApp : Application
                     Check(((StackPanel)((Flyout)logMenu.Flyout!).Content!).Children.OfType<Button>().Any(button=>ToolTip.GetTip(button)?.ToString()=="打开日志目录"), "更多操作保留自动日志目录入口");
                     a.StartAutomaticRecording(directory);a.Accept(Event(a, 3, "Alpha-recorded"));Select(a);
                     Check(a.Recording && !b.Recording && File.Exists(a.RecordingPath) && Field<StackPanel>("_savedPanel").IsVisible
-                        && Field<TextBlock>("_savedNotice").Text!.Contains(a.RecordingPath), "自动日志写入时显示所选会话文件路径");
+                        && Field<TextBlock>("_savedNotice").Text=="本次日志 · 1 个通道"
+                        && ToolTip.GetTip(Field<TextBlock>("_savedNotice"))?.ToString()?.Contains(a.RecordingPath)==true,
+                        "自动日志显示简短状态，悬停可查看完整文件路径");
                     a.StopRecording();
                     Check(!a.Recording && File.Exists(a.RecordingPath), "结束后保留可回放的自动日志");
                     var pairNative=Meta(clientId,"native","take-1"); var pairSdk=Meta(clientId,"sdk","take-1");
@@ -235,7 +284,9 @@ public sealed class SmokeApp : Application
                     Check(pairNative.Recording && pairSdk.Recording && !olderSdk.Recording, "同次采集的原生与 SDK 通道各有独立自动日志");
                     var late=Meta(clientId,"sdk","take-1"); sessions[late.Id]=late;late.StartAutomaticRecording(directory);await Task.Delay(650);
                     Select(pairSdk); Check(State().GetProperty("recording").GetBoolean(), "切换同卡通道保留整体自动记录状态");
-                    Check(Field<TextBlock>("_savedNotice").Text!.Contains("3 个通道"), "同卡多通道日志路径反馈包含通道数");
+                    Check(Field<TextBlock>("_savedNotice").Text=="本次日志 · 3 个通道"
+                        && new[]{pairNative.RecordingPath,pairSdk.RecordingPath,late.RecordingPath}.All(path=>ToolTip.GetTip(Field<TextBlock>("_savedNotice"))?.ToString()?.Contains(path)==true),
+                        "同卡多通道日志保留简短状态和全部路径提示");
                     Connected(pairNative,false);pairNative.StopRecording();await Task.Delay(350);
                     Check(!pairNative.Recording && pairSdk.Recording, "单个通道结束后其余通道仍在记录");
                     Connected(pairSdk,false);Connected(late,false);pairSdk.StopRecording();late.StopRecording();await Task.Delay(650);
@@ -695,6 +746,34 @@ public sealed class SmokeApp : Application
                     Check(unknownStart.Children.OfType<SelectableTextBlock>().Single() is {Text:"开始发生在记录之前"} startValue&&startValue.Foreground?.ToString()==good&&unknownStart.Children.OfType<TextBlock>().First(x=>x.Text=="开始播放").Foreground?.ToString()==good,"起点未知但有播放证据时开始标签和值仍使用绿色");
                     await Task.Delay(400);
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/unknown-start.png"),window.CapturePng("window"));
+                    var categoryVisual=Meta(Guid.NewGuid().ToString("N"),"native","category-visual");sessions[categoryVisual.Id]=categoryVisual;
+                    var categoryCases=new (string Id,string Name,double At,string[] Categories)[] {
+                        ("single","UI_Click",1,["SFX_UI"]),
+                        ("multi","Music_Loop",2,["Music","Volume_Music","Trigger_Music"]),
+                        ("unknown","Unclassified_Cue",3,[])
+                    };
+                    int categorySeq=0;
+                    foreach(var item in categoryCases)
+                    {
+                        var playbackId="visual-"+item.Id;var voiceId="visual-voice-"+item.Id;
+                        categoryVisual.Accept(new WireEvent {session=categoryVisual.Id,seq=++categorySeq,time=item.At,kind="request",entity="cue",objectId=playbackId,name=item.Name});
+                        categoryVisual.Accept(new WireEvent {session=categoryVisual.Id,seq=++categorySeq,time=item.At+.02,kind="play",entity="voice",objectId=voiceId,parentId=playbackId,name=item.Name});
+                        for(int index=0;index<item.Categories.Length;index++)
+                            categoryVisual.Accept(new WireEvent {session=categoryVisual.Id,seq=++categorySeq,time=item.At+.03+index*.001,kind="category",entity="category",objectId="category-index:"+(Array.IndexOf(new[]{"SFX_UI","Music","Volume_Music","Trigger_Music"},item.Categories[index])+1),parentId=playbackId,name=item.Categories[index]});
+                        categoryVisual.Accept(new WireEvent {session=categoryVisual.Id,seq=++categorySeq,time=item.At+.38,kind="stop",entity="voice",objectId=voiceId,parentId=playbackId,name=item.Name});
+                        categoryVisual.Accept(new WireEvent {session=categoryVisual.Id,seq=++categorySeq,time=item.At+.4,kind="stop",entity="cue",lifecycle="stopped",objectId=playbackId,name=item.Name});
+                    }
+                    Select(categoryVisual);window.ApplyUiAction("workspace","Timeline");window.ApplyUiAction("range","0:4");window.ApplyUiAction("filter","");await Task.Delay(200);
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/category-tracks-dark.png"),window.CapturePng("window"));
+                    var categoryTips=(List<(Rect rect,string tip)>)typeof(TimelineControl).GetField("_playbackTips",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(Field<TimelineControl>("_timeline"))!;
+                    Check(categoryTips.Any(t=>t.rect.X<=5&&t.tip.Contains("Category：SFX_UI"))
+                        &&categoryTips.Any(t=>new[]{"Music","Volume_Music","Trigger_Music"}.All(t.tip.Contains))
+                        &&categoryTips.Any(t=>t.tip.Contains("Category：实例归属未记录")),
+                        "单分类、多分类和未知归属的色标区域都有准确说明");
+                    window.Width=980;await Task.Delay(250);
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/category-tracks-narrow.png"),window.CapturePng("window"));
+                    window.Width=1480;window.ApplyUiAction("theme","light");await Task.Delay(250);
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/category-tracks-light.png"),window.CapturePng("window"));
                     Console.WriteLine($"结果：{passed}/{passed} UI 检查通过"); desktop.Shutdown(0);
                 }
                 catch (Exception ex) { Console.Error.WriteLine($"FAIL：已通过 {passed} 项；{ex}"); desktop.Shutdown(1); }

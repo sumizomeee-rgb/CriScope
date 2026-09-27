@@ -132,6 +132,9 @@ public sealed class TimelineControl : Control
     private readonly List<(Rect rect, WireEvent? item, string? key)> _spatialHits = [];
     private WireEvent[]? _groupEvents, _groupGaps, _controlEvents, _controlAssociationEvents;
     private double _groupEnd=double.NaN, _controlEnd=double.NaN;
+    private WireEvent[]? _categoryAssociationEvents;
+    private double _categoryEnd=double.NaN;
+    private Dictionary<(string Session,string Channel,string Playback),WireEvent[]> _categoriesByPlayback=[];
     private int _controlMask;
     private PlaybackGroup[] _playbackGroups=[];
     private ControlGroup[] _controlRows=[];
@@ -145,6 +148,20 @@ public sealed class TimelineControl : Control
         if(!ReferenceEquals(_groupEvents,Events)||!ReferenceEquals(_groupGaps,Discontinuities)||_groupEnd!=End)
         { _groupEvents=Events;_groupGaps=Discontinuities;_groupEnd=End;_playbackGroups=PlaybackPresentation.Group(Events.Concat(Discontinuities),End); }
         return _playbackGroups;
+    }
+    private WireEvent[] CategoriesFor(PlaybackGroup group,WireEvent anchor)
+    {
+        var evidence=AssociationEvents.Length>0?AssociationEvents:Events;
+        if(!ReferenceEquals(_categoryAssociationEvents,evidence)||_categoryEnd!=End)
+        {
+            _categoryAssociationEvents=evidence;_categoryEnd=End;
+            _categoriesByPlayback=evidence.Where(e=>e.kind=="category"&&e.parentId.Length>0&&e.time<=End)
+                .GroupBy(e=>(e.session,e.channel,e.parentId))
+                .ToDictionary(g=>g.Key,g=>g.GroupBy(e=>e.objectId,StringComparer.Ordinal)
+                    .Select(items=>items.OrderBy(e=>e.time).ThenBy(e=>e.seq).Last())
+                    .OrderBy(e=>e.name,StringComparer.Ordinal).ThenBy(e=>e.objectId,StringComparer.Ordinal).ToArray());
+        }
+        return _categoriesByPlayback.GetValueOrDefault((anchor.session,anchor.channel,group.Id))??[];
     }
     private ControlGroup[] ControlRows()
     {
@@ -172,6 +189,8 @@ public sealed class TimelineControl : Control
     public double Start => End-ViewSpan;
     private double X(double time) => LabelWidth+(time-Start)/ViewSpan*PlotWidth;
     private static readonly Typeface Font = new("Segoe UI, Microsoft YaHei UI");
+    private static readonly Geometry ExpandedChevron=Geometry.Parse("M0,0 L4,4 L8,0");
+    private static readonly Geometry CollapsedChevron=Geometry.Parse("M1,0 L5,4 L1,8");
     private void SelectTimeAxis(bool wall)
     {
         if(PreferWallTime==wall)return;
@@ -340,7 +359,7 @@ public sealed class TimelineControl : Control
             for(double seconds=Math.Ceiling(wallStart/step)*step;seconds<=wallStart+(End-axisStart)+step*.000001;seconds+=step)
             {
                 var t=axisStart+seconds-wallStart;var x=X(t);
-                c.DrawLine(new Pen(Palette.Border,.5),new Point(x,31),new Point(x,Bounds.Height-28));
+                c.DrawLine(new Pen(Palette.TimelineGrid,.6),new Point(x,34),new Point(x,Bounds.Height-28));
                 var wall=DateTimeOffset.FromUnixTimeMilliseconds((long)Math.Round(seconds*1000));
                 Text(c,WallTickLabel(wall,step),x+4,10,size:10);
             }
@@ -348,7 +367,7 @@ public sealed class TimelineControl : Control
         else
         {
             double step=Math.Pow(10,Math.Floor(Math.Log10(ViewSpan/8)));if(ViewSpan/step>16)step*=5;else if(ViewSpan/step>10)step*=2;
-            for(double t=Math.Max(TimeOrigin,TimeOrigin+Math.Ceiling((Start-TimeOrigin)/step)*step);t<=End;t+=step){var x=X(t);c.DrawLine(new Pen(Palette.Border,.5),new Point(x,31),new Point(x,Bounds.Height-28));Text(c,Stamp(t),x+4,10,size:10);}
+            for(double t=Math.Max(TimeOrigin,TimeOrigin+Math.Ceiling((Start-TimeOrigin)/step)*step);t<=End;t+=step){var x=X(t);c.DrawLine(new Pen(Palette.TimelineGrid,.6),new Point(x,34),new Point(x,Bounds.Height-28));Text(c,Stamp(t),x+4,10,size:10);}
         }
         c.DrawLine(new Pen(Palette.Border),new Point(0,34),new Point(Bounds.Width,34));
         if(Mode=="AISAC")DrawControls(c);else if(Mode=="Performance")DrawResources(c);else DrawTracks(c);
@@ -375,9 +394,9 @@ public sealed class TimelineControl : Control
     }
     private void DrawTracks(DrawingContext c)
     {
-        Text(c,"声音播放区间",14,45,Palette.Selection);
-        Text(c,"◇ 播放请求",158,45,Palette.Voice);
-        Text(c,"声音结束后仍保留在所选历史范围",385,45);
+        Text(c,"播放实例",14,46,Palette.Text,11);
+        Text(c,"声音活动",LabelWidth+10,46,Palette.Muted,11);
+        c.DrawLine(new Pen(Palette.TimelineGrid,1),new Point(LabelWidth,34),new Point(LabelWidth,Bounds.Height-28));
         var groups=PlaybackGroups();
         double y=75-_vertical;int row=0;
         using var clip=c.PushClip(new Rect(0,68,Bounds.Width,Math.Max(0,Bounds.Height-96)));
@@ -391,39 +410,40 @@ public sealed class TimelineControl : Control
             var voiceRows=expanded?group.Voices.Where(v=>v.LastOrDefault(e=>e.kind=="stop") is not {} stop||stop.time>=Start).ToArray():[];
             double h=PlaybackRowHeight+(expanded?Math.Max(1,voiceRows.Length)*38:0);
             if(!VisibleRow(y,h)){y+=h;row+=1+(expanded?Math.Max(1,voiceRows.Length):0);continue;}
-            if(row++%2==0)c.FillRectangle(Palette.Alternate,new Rect(0,y,Bounds.Width,PlaybackRowHeight));
+            if(row++%2==0)c.FillRectangle(Palette.Alternate,new Rect(0,y,LabelWidth,PlaybackRowHeight));
             var selectedId = Selected?.entity == "voice" ? Selected.parentId : Selected?.objectId;
             if(selectedId == group.Id) HighlightRow(c,new Rect(1,y+1,Bounds.Width-22,PlaybackRowHeight-2));
-            RowName(c,(expanded?"− ":"")+group.Name,y+3);
+            var categories=CategoriesFor(group,anchor);
+            var categoryColors=categories.Select(e=>Palette.Category(string.IsNullOrWhiteSpace(e.name)?e.objectId:e.name)).ToArray();
+            if(categories.Length>0)
+            {
+                var count=Math.Min(3,categories.Length);
+                for(int i=0;i<count;i++)
+                    c.FillRectangle(categoryColors[i],new Rect(5,y+7+i*10,3,categories.Length==1?27:7));
+            }
+            using(c.PushTransform(Matrix.CreateTranslation(15,y+18)))
+                c.DrawGeometry(null,new Pen(Palette.Muted,1.2),expanded?ExpandedChevron:CollapsedChevron);
+            using(c.PushClip(new Rect(29,y+2,LabelWidth-39,18)))
+                Text(c,Elide(group.Name,LabelWidth-(categories.Length>3?67:42),12),30,y+3,Palette.Text,12);
+            if(categories.Length>3)Text(c,"+"+(categories.Length-3),LabelWidth-30,y+5,Palette.Muted,9);
             var status=!SourceConnected&&group.ActiveVoiceCount>0?"已断开 · 保留最后状态":group.StatusLabel;
             var duration=group.DurationAt(End);
             var durationText=duration is {} seconds?seconds.ToString("0.000",CultureInfo.InvariantCulture)+" 秒":"";
-            var categories=AssociationPresentation.Categories(Events,group.Id,End);
             var categoryText=string.Join(" / ",categories.Select(e=>e.name));
-            var summary=string.Join(" · ",new[]{status,durationText,categoryText}.Where(text=>text.Length>0));
-            using(c.PushClip(new Rect(27,y+19,LabelWidth-37,22)))
-                Text(c,Elide(summary,LabelWidth-37,10),27,y+22,group.ActiveVoiceCount>0&&SourceConnected?Palette.Good:Palette.Muted,10);
-            string PlaybackStamp(double time)=>ShowingWallTime && ClockTimeAt?.Invoke(time) is { } wall
-                ? wall.ToLocalTime().ToString("HH:mm:ss.fff",CultureInfo.InvariantCulture) : Stamp(time);
+            var summary=string.Join(" · ",new[]{status,durationText}.Where(text=>text.Length>0));
+            using(c.PushClip(new Rect(29,y+19,LabelWidth-39,20)))
+                Text(c,Elide(summary,LabelWidth-40,10),30,y+23,group.ActiveVoiceCount>0&&SourceConnected?Palette.Request:Palette.Muted,10);
             string FullStamp(double time)=>ClockTimeAt?.Invoke(time) is { } wall
                 ? wall.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.fff",CultureInfo.InvariantCulture) : Stamp(time);
-            var beginLabel=group.StartedAt is {} began?PlaybackStamp(began):"";
             var endedLabel=group.EndedAt??group.InstanceEndedAt;
-            var endLabel=endedLabel is {} finished?PlaybackStamp(finished):"";
-            var timeText=beginLabel.Length>0?beginLabel+(endLabel.Length>0?" → "+endLabel:""):
-                endLabel.Length>0?endLabel:group.RequestAt is {} requested?"请求 "+PlaybackStamp(requested):"时间未记录";
-            using(c.PushClip(new Rect(LabelWidth+8,y+1,Math.Max(0,PlotWidth-16),16)))Text(c,timeText,LabelWidth+10,y+3,size:9);
             var fullTime=group.StartedAt is {} started?"开始播放："+FullStamp(started):"开始播放：未记录";
             if(group.RequestAt is {} requestedAt)fullTime="请求播放："+FullStamp(requestedAt)+"\n"+fullTime;
             if(endedLabel is {} endedTime)fullTime+="\n结束播放："+FullStamp(endedTime);
-            var tip=group.Name+"\n"+summary+"\n"+fullTime;
+            var tip=group.Name+"\n"+summary+(categoryText.Length>0?"\nCategory："+categoryText:"\nCategory：实例归属未记录")+"\n"+fullTime;
             var visibleTop=Math.Max(y,68);
             var visibleBottom=Math.Min(y+PlaybackRowHeight,Bounds.Height-28);
-            if(visibleBottom>visibleTop)_playbackTips.Add((new Rect(24,visibleTop,LabelWidth-24,visibleBottom-visibleTop),tip));
-            var timeTop=Math.Max(y+1,68);
-            var timeBottom=Math.Min(y+17,Bounds.Height-28);
-            if(timeBottom>timeTop)_playbackTips.Add((new Rect(LabelWidth+8,timeTop,Math.Max(0,PlotWidth-16),timeBottom-timeTop),tip));
-            if(expanded)_expandHits.Add((new Rect(0,y,24,PlaybackRowHeight),key));_hits.Add((new Rect(24,y,LabelWidth-24,PlaybackRowHeight),anchor));
+            if(visibleBottom>visibleTop)_playbackTips.Add((new Rect(4,visibleTop,Math.Max(0,Bounds.Width-26),visibleBottom-visibleTop),tip));
+            _expandHits.Add((new Rect(9,y,17,PlaybackRowHeight),key));_hits.Add((new Rect(27,y,LabelWidth-27,PlaybackRowHeight),anchor));
             // A Cue request is a point observation, not evidence of continuous voice allocation.
             if(group.Request is {} request&&request.time>=Start&&request.time<=End)
             {
@@ -434,21 +454,22 @@ public sealed class TimelineControl : Control
                 _hits.Add((new Rect(px-6,y,12,PlaybackRowHeight),request));
             }
             foreach(var interval in group.VoiceIntervals)
-                DrawInterval(interval.Begin,interval.End,group.End,y,PlaybackRowHeight,Palette.Selection,
-                    interval.Begin.kind!="play"||PlaybackPresentation.IsUnknownStart(interval.Begin));
+                DrawInterval(interval.Begin,interval.End,group.End,y,PlaybackRowHeight,
+                    categoryColors.Length==1?categoryColors[0]:Palette.Muted,
+                    interval.Begin.kind!="play"||PlaybackPresentation.IsUnknownStart(interval.Begin),categoryColors);
             y+=PlaybackRowHeight;
             if(!expanded)continue;
             foreach(var voice in voiceRows)
             {
                 var begin=voice.FirstOrDefault(e=>e.kind=="play")??voice[0];var stop=voice.LastOrDefault(e=>e.kind=="stop");
                 if(!VisibleRow(y,38)){y+=38;row++;continue;}
-                if(row++%2==0)c.FillRectangle(Palette.Alternate,new Rect(0,y,Bounds.Width,38));
+                if(row++%2==0)c.FillRectangle(Palette.Alternate,new Rect(0,y,LabelWidth,38));
                 bool unknown=begin.kind!="play"||PlaybackPresentation.IsUnknownStart(begin);
                 Text(c,"↳ Voice "+(Array.IndexOf(group.Voices,voice)+1),28,y+3,Palette.Voice,11);
                 var state=stop!=null?"已结束":group.End!=null?"实例已结束":group.HasEvidenceGap?"采集中断":SourceConnected?"播放中":"已断开";
                 var elapsed=stop!=null&&!unknown?(stop.time-begin.time).ToString("0.000",CultureInfo.InvariantCulture)+" 秒":unknown?"开始时间未记录":"+"+Stamp(begin.time);
                 Text(c,state+" · "+elapsed,28,y+21,size:9);
-                DrawInterval(begin,stop,group.End,y,38,Palette.Voice,unknown);
+                DrawInterval(begin,stop,group.End,y,38,Palette.Voice,unknown,[]);
                 _hits.Add((new Rect(24,y,LabelWidth-24,38),begin));y+=38;
             }
             if(voiceRows.Length==0){Text(c,group.Voices.Length==0?"此请求没有关联的 Voice 记录":"当前范围没有 Voice 区间",28,y+10,size:10);y+=38;}
@@ -456,7 +477,7 @@ public sealed class TimelineControl : Control
         _contentHeight=y+_vertical-75;
         if(row==0)Empty(c,"当前范围没有播放实例","每次 Cue 播放独立成行；静音 Voice 同样保留。可调整时间范围查看历史。");
 
-        void DrawInterval(WireEvent begin,WireEvent? voiceStop,WireEvent? instanceEnd,double top,double height,IBrush brush,bool unknown)
+        void DrawInterval(WireEvent begin,WireEvent? voiceStop,WireEvent? instanceEnd,double top,double height,IBrush brush,bool unknown,IBrush[] categoryColors)
         {
             if(!VisibleRow(top,height))return;
             var stop=voiceStop;
@@ -468,10 +489,15 @@ public sealed class TimelineControl : Control
             if(gap!=null){end=gap.time;stop=null;}
             var left=Math.Max(LabelWidth,X(begin.time));var right=Math.Min(LabelWidth+PlotWidth,X(end));
             if(right<left)return;
-            var center=top+height/2;c.FillRectangle(brush,new Rect(left,center-4,Math.Max(2,right-left),8));
+            var center=top+height/2;var width=Math.Max(2,right-left);
+            c.FillRectangle(brush,new Rect(left,center-(categoryColors.Length>1?4:3),width,categoryColors.Length>1?8:6));
+            // Parallel hairlines communicate simultaneous Category membership, not time segments.
+            if(categoryColors.Length>1)
+                for(int i=0;i<Math.Min(3,categoryColors.Length);i++)
+                    c.FillRectangle(categoryColors[i],new Rect(left,center-3.3+i*2.2,width,1.5));
             if(unknown){c.DrawLine(new Pen(brush,1.5),new Point(left+7,center-6),new Point(left,center));c.DrawLine(new Pen(brush,1.5),new Point(left,center),new Point(left+7,center+6));}
             else if(begin.time>=Start)c.DrawLine(new Pen(brush,2),new Point(left,center-9),new Point(left,center+9));
-            if(stop!=null)c.DrawLine(new Pen(Palette.Error,2),new Point(right,center-9),new Point(right,center+9));
+            if(stop!=null)c.DrawLine(new Pen(Palette.Muted,2),new Point(right,center-9),new Point(right,center+9));
             else c.DrawEllipse(Palette.Canvas,new Pen(brush,1.5),new Point(right,center),4,4);
             if(IsSelected(begin)&&begin.time>=Start)c.DrawEllipse(null,new Pen(Palette.Selection,2),new Point(left,center),11,11);
             if(stop!=null&&IsSelected(stop))c.DrawEllipse(null,new Pen(Palette.Selection,2),new Point(right,center),11,11);

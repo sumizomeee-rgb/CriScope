@@ -40,7 +40,7 @@ public sealed partial class MainWindow : Window
     private ScrollViewer _detailsScroll = null!;
     private SelectableTextBlock _inspectorKind = null!, _inspectorName = null!, _inspectorInstance = null!;
     private ListBox _events = null!;
-    private TextBlock _identity = null!, _states = null!, _status = null!, _range = null!;
+    private TextBlock _states = null!, _status = null!, _range = null!;
     private TextBox _filter = null!;
     private Button _live = null!;
     private Grid _body = null!;
@@ -181,6 +181,14 @@ public sealed partial class MainWindow : Window
         if(icon!=IconKind.None)panel.Children.Add(VisualLanguage.Glyph(icon,accent?_p.Canvas:_p.Text));
         panel.Children.Add(Label(text,12,accent ? _p.Canvas : _p.Text)); return panel;
     }
+    private Control CategoryChipContent(string text)
+    {
+        var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        content.Children.Add(new TextBlock { Text = text, FontSize = 11, Foreground = _p.Selection,
+            TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 82, VerticalAlignment = VerticalAlignment.Center });
+        content.Children.Add(Label("×", 13, _p.Selection));
+        return content;
+    }
     private Border Surface(Control child, IBrush background, Thickness? padding = null) => new()
     { Child = child, Background = background, Padding = padding ?? new Thickness(0), BorderBrush = _p.Border, BorderThickness = new Thickness(0, 0, 0, 1) };
 
@@ -189,13 +197,12 @@ public sealed partial class MainWindow : Window
         _rebuilding = true;
         RequestedThemeVariant = _p.Light ? ThemeVariant.Light : ThemeVariant.Dark;
         Background = _p.Canvas;
-        var root = new Grid { RowDefinitions = new RowDefinitions("36,52,*,Auto") };
+        var root = new Grid { RowDefinitions = new RowDefinitions("36,40,*,Auto") };
         root.Children.Add(new WindowTitleBar(this, _p));
         var top = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(16, 0) };
-        var identity = new StackPanel { Spacing = 3, VerticalAlignment = VerticalAlignment.Center };
-        _identity = Label("CriScope", 13);
-        _states = Label("未连接", 11, _p.Muted);
-        identity.Children.Add(_identity); identity.Children.Add(_states); top.Children.Add(identity);
+        _states = Label("未连接", 12, _p.Muted);
+        _states.TextTrimming = TextTrimming.CharacterEllipsis;
+        top.Children.Add(_states);
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
         var importLog=Action("导入日志…", async () =>
         {
@@ -256,10 +263,11 @@ public sealed partial class MainWindow : Window
         drawers.Children.Add(_detailsToggle);
         Grid.SetColumn(drawers,1); workspaceBar.Children.Add(drawers);
         main.Children.Add(Surface(workspaceBar, _p.Canvas));
-        var toolbar = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto,Auto"), Margin = new Thickness(14, 5) };
+        var toolbar = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto,Auto,Auto"), Margin = new Thickness(14, 5) };
         _filter = new TextBox { PlaceholderText = "筛选名称、对象、类型或内容…", FontSize = 12, Background = _p.Panel, BorderBrush = _p.Border, MinWidth = 120 };
         _filter.TextChanged += (_, _) => { if (!_rebuilding) { _filterException=null; UpdateEvents(); } };
-        _categoryChip=Action(_categoryName.Length>0?"Category: "+_categoryName+" ×":"清除筛选",()=>{_categoryId="";_categoryName="";_filterException=null;UpdateEvents();});
+        _categoryChip=Action("清除筛选",()=>{_categoryId="";_categoryName="";_filterException=null;UpdateEvents();});
+        _categoryChip.MaxWidth=150;_categoryChip.Padding=new Thickness(8,4);_categoryChip.Margin=new Thickness(0,0,8,0);
         _categoryChip.IsVisible=_categoryId.Length>0;toolbar.Children.Add(_categoryChip);
         Grid.SetColumn(_filter,1); toolbar.Children.Add(_filter);
         _live = Action("跟随最新", ToggleView); _live.Margin = new Thickness(8, 0, 0, 0);
@@ -267,7 +275,7 @@ public sealed partial class MainWindow : Window
         _windowRange = new ComboBox { ItemsSource = new[] { "最近 10 秒", "最近 30 秒", "最近 2 分钟", "自定义范围" }, SelectedIndex = 1, MinWidth = 118, FontSize = 11, Margin = new Thickness(8,0,0,0) };
         _windowRange.SelectionChanged += (_,_) => { if (_rebuilding || _timeline == null || _windowRange.SelectedIndex > 2) return; _timeline.Span = new[] {10d,30d,120d}[_windowRange.SelectedIndex]; Refresh(); };
         Grid.SetColumn(_windowRange, 3); toolbar.Children.Add(_windowRange);
-        var fit = Action("全览", ()=>ApplyUiAction("fit",null)); fit.Margin = new Thickness(8, 0, 0, 0); Grid.SetColumn(fit, 4); toolbar.Children.Add(fit);
+        var fit = Action("全览", ()=>ApplyUiAction("fit",null)); fit.Margin = new Thickness(8, 0, 0, 0); Grid.SetColumn(fit, 5); toolbar.Children.Add(fit);
         if(_mode is "Location" or "Mixing"){fit.IsVisible=false;_windowRange.IsVisible=false;}
         ToolTip.SetTip(fit, "一次性缩放到当前保留的事件范围，并暂停跟随；不停止采集");
         Grid.SetRow(toolbar, 1); main.Children.Add(toolbar);
@@ -279,13 +287,11 @@ public sealed partial class MainWindow : Window
         _timeline.TimeAxisModeChanged += wall=>{_preferWallTimeAxis=wall;_timeAxisPreferences.Save(wall);};
         _timeline.SelectionCleared += () => { _selected = null; Inspector(); };
         _timeline.ViewChanged += () => { if (!_timeline.Live) _playing = false; _live.Content = ButtonContent(_timeline.Live ? "跟随最新 · 开" : "返回实时"); UpdateRange(); UpdateEvents(); };
-        var axisHost = new Grid();
-        axisHost.Children.Add(_timeline);
         var axisMode = new ToggleButton
         {
             Name = "TimeAxisToggle", IsChecked = _preferWallTimeAxis,
-            Width = 32, Height = 32, MinHeight = 0, Margin = new Thickness(14, 3, 0, 0),
-            HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
+            Width = 32, Height = 32, MinHeight = 0, Margin = new Thickness(8, 0, 0, 0),
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
             Padding = new Thickness(0), CornerRadius = new CornerRadius(6)
         };
         Border? axisVisual = null;
@@ -321,8 +327,8 @@ public sealed partial class MainWindow : Window
         axisMode.PointerExited += (_, _) => { if (axisVisual != null) { axisVisual.Background = _p.Alternate; axisVisual.BorderBrush = axisMode.IsChecked == true ? _p.Selection : _p.Border; } };
         SyncAxisMode();
         axisMode.IsVisible = _mode is "Timeline" or "AISAC" or "Performance";
-        axisHost.Children.Add(axisMode);
-        Grid.SetRow(axisHost, 2); main.Children.Add(axisHost);
+        Grid.SetColumn(axisMode, 4); toolbar.Children.Add(axisMode);
+        Grid.SetRow(_timeline, 2); main.Children.Add(_timeline);
         _timeline.IsVisible=_mode!="Logs";
         _range = Label("事件证据  /  单调时间基准", 11, _p.Muted); _range.Margin = new Thickness(16, 0);
         ToolTip.SetTip(_range,"时间窗口可包含已结束的历史记录；钟表时间由接收锚点估算");
@@ -371,7 +377,8 @@ public sealed partial class MainWindow : Window
         var footer = new StackPanel();
         _status.MinHeight = 29; footer.Children.Add(_status);
         _savedPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Margin = new Thickness(15,0,15,6), IsVisible = false };
-        _savedNotice = Label("",11,_p.Good); _savedNotice.TextTrimming = TextTrimming.CharacterEllipsis; _savedNotice.MaxWidth = 940;
+        _savedNotice = Label("",11,_p.Good); _savedNotice.TextTrimming = TextTrimming.CharacterEllipsis; _savedNotice.MaxWidth = 260;
+        AddCopyMenu(_savedNotice,()=>ToolTip.GetTip(_savedNotice)?.ToString()??"","复制日志路径");
         _savedPanel.Children.Add(_savedNotice);
         _savedPanel.Children.Add(Action("打开文件夹", () =>
         {
@@ -609,8 +616,8 @@ public sealed partial class MainWindow : Window
         _visibleLogPath = visiblePaths.FirstOrDefault();
         _savedPanel.IsVisible = _visibleLogPath != null;
         _savedNotice.Text = _visibleLogPath == null ? "" : currentLogPaths.Length > 0
-            ? $"本次自动日志{(visiblePaths.Length > 1 ? $"（{visiblePaths.Length} 个通道）" : "")} · {_visibleLogPath}"
-            : "已导出 · " + _visibleLogPath;
+            ? $"本次日志 · {visiblePaths.Length} 个通道"
+            : "问题包已导出";
         ToolTip.SetTip(_savedNotice, string.Join("\n", visiblePaths));
         if (_session is { IsReplay: false, Connected: false } previous && _timeline.Live && !string.IsNullOrEmpty(previous.ClientId))
         {
@@ -680,7 +687,6 @@ public sealed partial class MainWindow : Window
         }
         if (_session is { } s)
         {
-            _identity.Text="CriScope";
             var replay = s.IsReplay;
             var recordingTargets = RecordingTargets(s);
             var recordingCount = recordingTargets.Count(target => target.Recording);
@@ -767,7 +773,10 @@ public sealed partial class MainWindow : Window
         if(_categoryChip!=null)
         {
             _categoryChip.IsVisible=_categoryId.Length>0||_filterException!=null&&query.Length>0;
-            _categoryChip.Content=Label(_categoryId.Length>0?"Category: "+_categoryName+(_filterException!=null?" · 临时定位":"")+" ×":"临时显示定位目标 ×",11,_p.Selection);
+            _categoryChip.Content=CategoryChipContent(_categoryId.Length>0?_categoryName:"临时定位");
+            ToolTip.SetTip(_categoryChip,_categoryId.Length>0
+                ? "Category: "+_categoryName+(_filterException!=null?" · 临时定位":"")+"\n点击清除筛选"
+                : "临时显示定位目标\n点击清除筛选");
         }
         _timeline.AssociationEvents = _snapshot;
         _timeline.BusHistoryIsSparse = _session is { IsReplay: true, BusSamplesAreEventTriggered: true };
