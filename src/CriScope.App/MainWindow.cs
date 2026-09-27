@@ -159,13 +159,30 @@ public sealed partial class MainWindow : Window
     { Text = text, FontSize = size, Foreground = color ?? _p.Text, VerticalAlignment = VerticalAlignment.Center };
     private Button Action(string text, Action action, bool accent = false)
     {
-        var b = new Button { Content = ButtonContent(text), FontSize = UiMetrics.ControlSize, Padding = new Thickness(UiMetrics.Space3, 7),
-            Background = accent ? _p.Alternate : Brushes.Transparent, Foreground = _p.Text,
-            BorderBrush = accent ? _p.Selection : _p.Border, BorderThickness = accent ? new Thickness(0,0,0,2) : new Thickness(0), CornerRadius = new CornerRadius(4) };
-        b.PointerEntered += (_, _) => { if (!accent) b.Background = _p.Hover; };
-        b.PointerExited += (_, _) => { if (!accent) b.Background = Brushes.Transparent; };
+        var b = new Button { Content = ButtonContent(text,accent), FontSize = UiMetrics.ControlSize, Padding = new Thickness(UiMetrics.Space3, 7),
+            Background = accent ? _p.Text : Brushes.Transparent, Foreground = accent ? _p.Canvas : _p.Text,
+            BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(4) };
+        b.PointerEntered += (_, _) => b.Background = accent ? _p.Muted : _p.Hover;
+        b.PointerExited += (_, _) => b.Background = accent ? _p.Text : Brushes.Transparent;
         ToolTip.SetTip(b, text);
         b.Click += (_, _) => action(); return b;
+    }
+    private Button WorkspaceTab(string text, Action action, bool selected)
+    {
+        var content=ButtonContent(text);
+        content.Opacity=selected?1:.82;
+        if(content is StackPanel panel)
+            foreach(var label in panel.Children.OfType<TextBlock>())
+                label.FontWeight=selected?FontWeight.SemiBold:FontWeight.Normal;
+        var tab=new Button {Content=content,FontSize=UiMetrics.ControlSize,
+            Padding=new Thickness(UiMetrics.Space3,7),MinHeight=34,
+            Background=selected?_p.Panel:Brushes.Transparent,
+            BorderThickness=new Thickness(0),CornerRadius=new CornerRadius(0),Tag="workspace:"+text};
+        tab.PointerEntered+=(_,_)=>{if(!selected){tab.Background=_p.Hover;content.Opacity=1;}};
+        tab.PointerExited+=(_,_)=>{tab.Background=selected?_p.Panel:Brushes.Transparent;content.Opacity=selected?1:.82;};
+        ToolTip.SetTip(tab,text);
+        tab.Click+=(_,_)=>action();
+        return tab;
     }
     private Control ButtonContent(string text, bool accent = false)
     {
@@ -184,9 +201,9 @@ public sealed partial class MainWindow : Window
     private Control CategoryChipContent(string text)
     {
         var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-        content.Children.Add(new TextBlock { Text = text, FontSize = 11, Foreground = _p.Selection,
+        content.Children.Add(new TextBlock { Text = text, FontSize = 11, Foreground = _p.Text,
             TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 82, VerticalAlignment = VerticalAlignment.Center });
-        content.Children.Add(Label("×", 13, _p.Selection));
+        content.Children.Add(Label("×", 13, _p.Muted));
         return content;
     }
     private Border Surface(Control child, IBrush background, Thickness? padding = null) => new()
@@ -250,7 +267,7 @@ public sealed partial class MainWindow : Window
         foreach (var (id, title) in new[] { ("Timeline", "声音时间线"), ("AISAC", "控制"), ("Mixing", "混音"), ("Location", "空间"), ("Performance", "资源"), ("Logs", "事件日志") })
         {
             var mode = id;
-            nav.Children.Add(Action(title, () => { _mode = mode; SaveView(); Build(); RestoreView(); Refresh(); }, _mode == id));
+            nav.Children.Add(WorkspaceTab(title, () => { _mode = mode; SaveView(); Build(); RestoreView(); Refresh(); }, _mode == id));
         }
         var workspaceBar = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         _backButton=Action("返回上一位置",Back);_backButton.IsVisible=_navigation.Count>0;
@@ -376,9 +393,9 @@ public sealed partial class MainWindow : Window
     private void UpdateDetailsToggle()
     {
         if (_detailsToggle == null) return;
-        _detailsToggle.Background = _showInspector ? _p.Alternate : Brushes.Transparent;
-        _detailsToggle.BorderBrush = _showInspector ? _p.Selection : _p.Border;
-        _detailsToggle.BorderThickness = _showInspector ? new Thickness(0, 0, 0, 2) : new Thickness(0);
+        _detailsToggle.Background = _showInspector ? _p.Panel : Brushes.Transparent;
+        _detailsToggle.BorderBrush = _p.Border;
+        _detailsToggle.BorderThickness = _showInspector ? new Thickness(1) : new Thickness(0);
         ToolTip.SetTip(_detailsToggle, _showInspector ? "隐藏事件详情" : "显示事件详情");
     }
     private void SaveView()
@@ -622,7 +639,8 @@ public sealed partial class MainWindow : Window
                 var card = new StackPanel { Spacing = 6, Margin = new Thickness(8,3) };
                 var duplicateName = clientGroups.Count(other => string.Equals(ClientCardPresentation.Default(other).Name, preferred.Name, StringComparison.OrdinalIgnoreCase)) > 1;
                 var headingLine = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 6 };
-                var clientName = Label(string.IsNullOrWhiteSpace(preferred.Name) ? "未命名客户端" : preferred.Name, 13, selected ? _p.Selection : _p.Text);
+                var clientName = Label(string.IsNullOrWhiteSpace(preferred.Name) ? "未命名客户端" : preferred.Name, 13, _p.Text);
+                clientName.FontWeight=selected?FontWeight.SemiBold:FontWeight.Normal;
                 clientName.TextTrimming = TextTrimming.CharacterEllipsis;
                 headingLine.Children.Add(clientName);
                 var cardStatus = ClientCardPresentation.Status(group);
@@ -646,8 +664,8 @@ public sealed partial class MainWindow : Window
                 if(channels.Children.Count>0)lines.Children.Add(channels);
                 var heading = Action("",()=>SelectSession(preferred)); heading.Content=lines;
                 heading.HorizontalAlignment=HorizontalAlignment.Stretch;heading.HorizontalContentAlignment=HorizontalAlignment.Left;
-                heading.Padding=new Thickness(10,12);heading.BorderBrush=selected?_p.Selection:_p.Border;
-                heading.BorderThickness=new Thickness(selected?1:0);heading.Background=selected?_p.Alternate:Brushes.Transparent;
+                heading.Padding=new Thickness(10,12);heading.BorderBrush=selected?_p.Muted:Brushes.Transparent;
+                heading.BorderThickness=selected?new Thickness(3,0,0,0):new Thickness(0);heading.Background=selected?_p.Alternate:Brushes.Transparent;
                 heading.Tag=selected?"selected-client":"client";
                 heading.PointerExited+=(_,_)=>heading.Background=selected?_p.Alternate:Brushes.Transparent;
                 ToolTip.SetTip(heading, $"{preferred.Name}\n{preferred.Machine} · {preferred.Platform}\nPID {preferred.Pid}\n同一客户端的原生与 SDK 数据合并浏览");

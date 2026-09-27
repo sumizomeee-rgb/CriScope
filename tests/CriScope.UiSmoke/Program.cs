@@ -111,6 +111,14 @@ public sealed class SmokeApp : Application
                     await Task.Delay(150);
                     var axisTimeline=Field<TimelineControl>("_timeline");
                     Check(axisTimeline.PreferWallTime&&axisTimeline.ShowingWallTime&&axisTimeline.ClockTimeAt?.Invoke(a.TimeOrigin) is {} clockPoint&&axisTimeline.DisplayStamp(a.TimeOrigin).Contains(clockPoint.ToLocalTime().ToString("HH:mm:ss")),"有接收锚点时默认展示真实钟表时间");
+                    var controlWall=axisTimeline.ClockTimeAt!(a.TimeOrigin)!.Value;
+                    string ControlStamp(TimelineControl timeline,double time) => (string)typeof(TimelineControl).GetMethod("ControlRowStamp",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(timeline,[time])!;
+                    string ControlTipStamp(TimelineControl timeline,double time) => (string)typeof(TimelineControl).GetMethod("ControlRowTipStamp",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(timeline,[time])!;
+                    Check(ControlStamp(axisTimeline,a.TimeOrigin)==controlWall.ToLocalTime().ToString("HH:mm:ss.fff")
+                        &&ControlTipStamp(axisTimeline,a.TimeOrigin)==controlWall.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.fff"),
+                        "控制行只显示钟表时间，悬停提示保留完整日期");
+                    var controlTab=window.GetVisualDescendants().OfType<Button>().Single(button=>button.Tag?.ToString()=="workspace:控制");
+                    Check(controlTab.BorderThickness.Bottom==0,"当前工作区标签不显示紫色下划线");
                     string AxisTip() => (string)typeof(TimelineControl).GetMethod("TimeAxisToggleTip",BindingFlags.Instance|BindingFlags.NonPublic)!
                         .Invoke(Field<TimelineControl>("_timeline"),null)!;
                     Check(axisTimeline.PreferWallTime
@@ -140,6 +148,10 @@ public sealed class SmokeApp : Application
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/axis-mode-narrow.png"),window.CapturePng("window"));
                     Click(Field<Button>("_detailsToggle"));await Task.Delay(260);
                     CheckAxisLayout("最窄窗口打开详情");
+                    var detailsButton=Field<Button>("_detailsToggle");
+                    Check(detailsButton.BorderThickness==new Thickness(1)
+                        &&detailsButton.BorderBrush?.ToString()!=Field<object>("_p").GetType().GetProperty("Selection")!.GetValue(Field<object>("_p"))!.ToString(),
+                        "详情开启时使用中性全边框，不显示紫色底线");
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/axis-mode-narrow-details.png"),window.CapturePng("window"));
                     var categoryIdField=typeof(MainWindow).GetField("_categoryId",BindingFlags.Instance|BindingFlags.NonPublic)!;
                     var categoryNameField=typeof(MainWindow).GetField("_categoryName",BindingFlags.Instance|BindingFlags.NonPublic)!;
@@ -172,6 +184,7 @@ public sealed class SmokeApp : Application
                     axisTimeline=Field<TimelineControl>("_timeline");
                     axisTimeline.SetTimeAxisMode(false);
                     Check(!axisTimeline.ShowingWallTime&&axisTimeline.DisplayStamp(a.TimeOrigin)==axisTimeline.Stamp(a.TimeOrigin)
+                        &&ControlStamp(axisTimeline,a.TimeOrigin)==axisTimeline.Stamp(a.TimeOrigin)
                         &&AxisTip().StartsWith("当前：相对时间")
                         &&AxisTip().Contains("钟表时间"),
                         "时间轴切换到相对时间并更新图标提示");
@@ -546,6 +559,8 @@ public sealed class SmokeApp : Application
                         &&controlChips.Count>0&&relatedCards.All(card=>controlChips.All(chip=>!card.Intersects(chip.rect))),
                         "AISAC 样本点、关联 Cue 卡片和顶部筛选项占据独立点击区域");
                     var cueLinks=(List<(Rect Rect,WireEvent Event)>)typeof(TimelineControl).GetField("_links",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(groupedTimeline)!;
+                    Check(cueLinks.Any(link=>relatedCards.Any(card=>card.Y==link.Rect.Y&&link.Rect.X-card.X<220&&link.Rect.Right<=card.Right)),
+                        "简短 Cue 名后的实例编号与跳转按钮紧邻显示");
                     var hoverLink=typeof(TimelineControl).GetMethod("UpdateLinkHover",BindingFlags.Instance|BindingFlags.NonPublic)!;
                     Check(cueLinks.Count>0&&hoverLink.Invoke(groupedTimeline,[cueLinks[0].Rect.Center]) is WireEvent
                         &&groupedTimeline.Cursor!=null&&typeof(TimelineControl).GetField("_hoverLinkRect",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(groupedTimeline) is Rect,
@@ -612,7 +627,9 @@ public sealed class SmokeApp : Application
                     Check(EventLogPresentation.Project(lifecycle).Count(e=>e.kind=="play")==2,"三个Voice归并为两个实例开始");
                     Check(EventLogPresentation.Project(lifecycle,true).Count(e=>e.kind=="play")==3,"声部明细保留全部分配记录");
                     var selectedCard=Field<StackPanel>("_sessions").GetLogicalDescendants().OfType<Button>().Single(b=>b.Tag?.ToString()=="selected-client");
-                    Check(selectedCard.BorderThickness.Left==1,"客户端选中框有实际厚度");
+                    Check(selectedCard.BorderThickness.Left==3
+                        &&selectedCard.BorderBrush?.ToString()!=Field<object>("_p").GetType().GetProperty("Selection")!.GetValue(Field<object>("_p"))!.ToString(),
+                        "客户端选中行使用中性左边线");
                     window.ApplyUiAction("workspace","Timeline");window.ApplyUiAction("select","1");
                     Check(Field<StackPanel>("_details").Children.OfType<Border>().Any(b=>b.Tag?.ToString()=="section:playback-time")&&Field<StackPanel>("_details").Children.OfType<Grid>().Any(g=>g.Tag?.ToString()=="row:已播放"),"播放时间以紧凑属性行呈现");
                     var stopRequest=new WireEvent {kind="stop-request",entity="cue",objectId=navRequest.objectId,time=2,endReason="playback-stop",session=navSession.Id};

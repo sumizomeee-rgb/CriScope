@@ -128,10 +128,11 @@ public sealed partial class MainWindow
         button.Cursor=new Cursor(StandardCursorType.Hand);
         row.PointerEntered+=(_,_)=>row.Background=_p.Hover;
         row.PointerExited+=(_,_)=>row.Background=Brushes.Transparent;
-        button.PointerEntered+=(_,_)=>{button.Background=_p.Hover;button.BorderBrush=_p.Selection;};
-        button.PointerExited+=(_,_)=>{button.Background=Brushes.Transparent;button.BorderBrush=Brushes.Transparent;};
-        button.GotFocus+=(_,_)=>button.BorderBrush=_p.Selection;
-        button.LostFocus+=(_,_)=>button.BorderBrush=Brushes.Transparent;
+        var hovered=false;
+        button.PointerEntered+=(_,_)=>{hovered=true;button.Background=_p.Hover;if(!button.IsFocused)button.BorderBrush=_p.Muted;};
+        button.PointerExited+=(_,_)=>{hovered=false;button.Background=Brushes.Transparent;if(!button.IsFocused)button.BorderBrush=Brushes.Transparent;};
+        button.GotFocus+=(_,_)=>{button.BorderBrush=_p.Text;button.BorderThickness=new Thickness(2);};
+        button.LostFocus+=(_,_)=>{button.BorderBrush=hovered?_p.Muted:Brushes.Transparent;button.BorderThickness=new Thickness(1);};
         ToolTip.SetTip(row,"点击右侧图标定位；名称和编号可选择、复制");
     }
 

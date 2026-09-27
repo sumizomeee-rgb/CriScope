@@ -38,6 +38,10 @@ public sealed class TimelineControl : Control
     public bool TimeAxisToggleHovered => _axisToggleHovered;
     public string DisplayStamp(double time) => ShowingWallTime && ClockTimeAt?.Invoke(time) is { } value
         ? value.ToLocalTime().ToString("MM-dd HH:mm:ss.fff",CultureInfo.InvariantCulture) : Stamp(time);
+    private string ControlRowStamp(double time) => ShowingWallTime && ClockTimeAt?.Invoke(time) is { } value
+        ? value.ToLocalTime().ToString("HH:mm:ss.fff",CultureInfo.InvariantCulture) : Stamp(time);
+    private string ControlRowTipStamp(double time) => ShowingWallTime && ClockTimeAt?.Invoke(time) is { } value
+        ? value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.fff",CultureInfo.InvariantCulture) : Stamp(time);
     public event Action<bool>? TimeAxisModeChanged;
     public string Stamp(double time) => TimeLabel(time-TimeOrigin);
     public void SetControlKind(string kind, bool enabled)
@@ -101,7 +105,7 @@ public sealed class TimelineControl : Control
     private void HighlightRow(DrawingContext c, Rect rect)
     {
         c.FillRectangle(Palette.Hover,rect);
-        c.FillRectangle(Palette.Selection,new Rect(rect.X,rect.Y+3,3,Math.Max(0,rect.Height-6)));
+        c.FillRectangle(Palette.Muted,new Rect(rect.X,rect.Y+3,3,Math.Max(0,rect.Height-6)));
     }
     private bool IsSelected(WireEvent item) => Selected is {} selected && selected.session==item.session && selected.seq==item.seq;
     public Rect SpatialOverlayBounds { get; private set; }
@@ -230,7 +234,7 @@ public sealed class TimelineControl : Control
         if(_axisToggleHovered)c.DrawRectangle(Palette.Hover,null,target,7,7);
         if(_axisKeyboardFocus)c.DrawRectangle(null,new Pen(Palette.Selection,1.5),target.Deflate(1),6,6);
         var center=target.Center;
-        var iconBrush=ShowingWallTime?Palette.Selection:Palette.Muted;
+        var iconBrush=ShowingWallTime?Palette.Text:Palette.Muted;
         var pen=new Pen(iconBrush,1.4);
         c.DrawEllipse(null,pen,center,7.5,7.5);
         c.DrawLine(pen,center,new Point(center.X,center.Y-4));
@@ -378,7 +382,7 @@ public sealed class TimelineControl : Control
             if(_drag is not {} start){
                 var playbackTip=Mode=="Timeline"?_playbackTips.LastOrDefault(h=>h.rect.Contains(p)).tip:null;
                 if(playbackTip!=null){ToolTip.SetTip(this,playbackTip);return;}
-                var hit=_hits.LastOrDefault(h=>h.rect.Contains(p));ToolTip.SetTip(this,hit.item==null?null:$"{hit.item.name}\n{DisplayStamp(hit.item.time)} · {hit.item.kind}\n{hit.item.detail}");return;
+                var hit=_hits.LastOrDefault(h=>h.rect.Contains(p));ToolTip.SetTip(this,hit.item==null?null:$"{hit.item.name}\n{(Mode=="AISAC"?ControlRowTipStamp(hit.item.time):DisplayStamp(hit.item.time))} · {hit.item.kind}\n{hit.item.detail}");return;
             }
             var delta=p.X-start.X;if(Math.Abs(delta)<8)return;
             if(_panning){End=_dragEnd-delta/PlotWidth*ViewSpan;Live=false;}
@@ -395,9 +399,11 @@ public sealed class TimelineControl : Control
     { var track=MixingScrollTrack;var thumb=MixingScrollThumb;_vertical=Math.Clamp((y-_scrollGrab-track.Y)/Math.Max(1,track.Height-thumb.Height),0,1)*MixingMaxScroll;InvalidateVisual(); }
     private void Text(DrawingContext c,string text,double x,double y,IBrush? brush=null,double size=11)
         =>c.DrawText(new FormattedText(text,CultureInfo.InvariantCulture,FlowDirection.LeftToRight,Font,size,brush??Palette.Muted),new Point(x,y));
+    private static double TextWidth(string value,double size)
+        =>new FormattedText(value,CultureInfo.InvariantCulture,FlowDirection.LeftToRight,Font,size,Brushes.White).Width;
     private static string Elide(string value,double width,double size)
     {
-        double Measure(string text)=>new FormattedText(text,CultureInfo.InvariantCulture,FlowDirection.LeftToRight,Font,size,Brushes.White).Width;
+        double Measure(string text)=>TextWidth(text,size);
         if(Measure(value)<=width)return value;
         const string ellipsis="…";
         if(Measure(ellipsis)>width)return "";
@@ -572,7 +578,6 @@ public sealed class TimelineControl : Control
         foreach(var group in groups)
         {
             bool expanded=_expanded.Contains(group.Key);
-            bool compact=PlotWidth<400;
             double height=40+(expanded?group.Rows.Sum(r=>ControlRowHeight(r)):0);
             if(!VisibleRow(y,height,contentTop-5)){y+=height;continue;}
             c.FillRectangle(Palette.Alternate,new Rect(0,y,Bounds.Width,40));
@@ -603,7 +608,7 @@ public sealed class TimelineControl : Control
                     Text(c,$"{row.Records.Length} 条"+(samples.Length==0?" · 本窗无新记录":""),28,y+25,size:10);
                 }
                 var owners=RelatedOwners(row);
-                double left=LabelWidth+10,width=Math.Max(60,Math.Min(370,PlotWidth-30));
+                double left=LabelWidth+10,width=Math.Max(0,Math.Min(370,Bounds.Width-left-22));
                 if(owners.Length==1)DrawRelatedCue(c,owners[0],left,y+22,width);
                 else if(owners.Length>1) {
                     var key="related:"+row.Key;
@@ -611,13 +616,20 @@ public sealed class TimelineControl : Control
                         Text(c,(_expanded.Contains(key)?"▾ ":"▸ ")+$"写入时最近 · {owners[0].Name}（共 {owners.Length} 个）",left,y+26,Palette.Voice,11);
                     _expandHits.Add((new Rect(left,y+22,width,28),key));
                     if(_expanded.Contains(key))for(int ownerIndex=0;ownerIndex<owners.Length;ownerIndex++)
-                        DrawRelatedCue(c,owners[ownerIndex],left+10,y+54+ownerIndex*32,width-10);
+                        DrawRelatedCue(c,owners[ownerIndex],left+10,y+54+ownerIndex*32,Math.Max(0,width-10));
                 }
                 else if(row.Kind is "aisac" or "selector" && !last.objectId.StartsWith("category",StringComparison.OrdinalIgnoreCase))
                     Text(c,row.EmptyRelationshipLabel,left,y+30,size:10);
-                using(c.PushClip(new Rect(LabelWidth+8,y+1,Math.Max(0,compact?PlotWidth-16:PlotWidth-220),22)))
-                    Text(c,(last.kind is "aisac" or "selector"?"最近设置：":"最近记录：")+ControlPresentation.Value(last),LabelWidth+10,y+5,Palette.Text,12);
-                if(!compact)Text(c,DisplayStamp(last.time),Math.Max(LabelWidth+180,Bounds.Width-202),y+6,size:10);
+                var recent=(last.kind is "aisac" or "selector"?"最近设置：":"最近记录：")+ControlPresentation.Value(last);
+                var time=ControlRowStamp(last.time);
+                double recentX=LabelWidth+10,available=Math.Max(0,Bounds.Width-recentX-22),timeWidth=TextWidth(time,10);
+                bool showTime=available>=timeWidth+12+TextWidth("最近设置：",12);
+                var visibleRecent=Elide(recent,Math.Max(0,available-(showTime?timeWidth+12:0)),12);
+                using(c.PushClip(new Rect(recentX,y+1,available,22)))
+                {
+                    Text(c,visibleRecent,recentX,y+5,Palette.Text,12);
+                    if(showTime)Text(c,time,recentX+TextWidth(visibleRecent,12)+12,y+6,size:10);
+                }
                 _hits.Add((new Rect(24,y,Math.Max(0,Bounds.Width-44),rowHeight),last));
                 // Discrete settings and callbacks; no interpolated curve or mixed parent value.
                 foreach(var e in samples)
@@ -637,22 +649,28 @@ public sealed class TimelineControl : Control
     private void DrawRelatedCue(DrawingContext c,PlaybackGroup owner,double x,double y,double width)
     {
         _relatedCueBounds.Add(new Rect(x,y,width,28));
-        c.FillRectangle(Palette.Panel,new Rect(x,y,width,28));
         var identity=ControlLabels.Get("播放实例",JsonSerializer.Serialize(new[]{owner.Request?.session??"",owner.Id})).Replace("播放实例 ","");
-        double idWidth=Math.Max(32,identity.Length*7),buttonX=x+width-28;
-        using(c.PushClip(new Rect(x,y,Math.Max(0,width-idWidth-36),22)))Text(c,"设置时 · "+owner.Name,x,y+4,Palette.Text,11);
-        Text(c,identity,buttonX-idWidth-4,y+4,Palette.Muted,11);
-        if(AssociationPresentation.Anchor(owner) is {} target && Events.Any(e=>e.session==target.session&&e.seq==target.seq))
+        var target=AssociationPresentation.Anchor(owner);
+        bool hasLink=width>=28 && target is {} anchor && Events.Any(e=>e.session==anchor.session&&e.seq==anchor.seq);
+        double idWidth=width>=130?TextWidth(identity,11):0;
+        var label=Elide("设置时 · "+owner.Name,Math.Max(0,width-idWidth-(idWidth>0?14:0)-36),11);
+        double buttonX=x+Math.Min(Math.Max(0,width-28),TextWidth(label,11)+(idWidth>0?idWidth+14:8));
+        using(c.PushClip(new Rect(x,y,width,28)))
         {
-            var buttonRect=new Rect(buttonX,y,28,28);
-            var hovered=_hoverLinkRect==buttonRect;
-            if(hovered)c.FillRectangle(Palette.Hover,buttonRect);
-            c.DrawRectangle(null,new Pen(hovered?Palette.Selection:Palette.Border,hovered?1.2:.8),buttonRect,4,4);
-            using(c.PushTransform(Matrix.CreateScale(.65,.65)*Matrix.CreateTranslation(buttonX+6,y+5)))
-                c.DrawGeometry(null,new Pen(hovered?Palette.Selection:Palette.Muted,1.6),Geometry.Parse(VisualLanguage.Path(IconKind.Locate)));
-            _links.Add((buttonRect,target));
+            Text(c,label,x,y+4,Palette.Text,11);
+            if(idWidth>0)Text(c,identity,x+TextWidth(label,11)+8,y+4,Palette.Muted,11);
+            if(hasLink)
+            {
+                var buttonRect=new Rect(buttonX,y,28,28);
+                var hovered=_hoverLinkRect==buttonRect;
+                if(hovered)c.FillRectangle(Palette.Hover,buttonRect);
+                c.DrawRectangle(null,new Pen(hovered?Palette.Text:Palette.Border,hovered?1.2:.8),buttonRect,4,4);
+                using(c.PushTransform(Matrix.CreateScale(.65,.65)*Matrix.CreateTranslation(buttonX+6,y+5)))
+                    c.DrawGeometry(null,new Pen(hovered?Palette.Text:Palette.Muted,1.6),Geometry.Parse(VisualLanguage.Path(IconKind.Locate)));
+                _links.Add((buttonRect,target!));
+            }
+            else Text(c,"历史",buttonX,y+5,Palette.Muted,10);
         }
-        else Text(c,"历史",buttonX-1,y+5,Palette.Muted,10);
     }
     private void DrawToggle(DrawingContext c,Rect rect,string label,bool enabled,string key,IBrush brush)
     {

@@ -51,7 +51,7 @@ public sealed partial class MainWindow
         _events = new ListBox { Background=_p.Canvas,BorderThickness=new Thickness(0),FontSize=11,Foreground=_p.Text,AutoScrollToSelectedItem=false };
         var selectedStyle=new Style(selector=>selector.OfType<ListBoxItem>().Class(":selected"));
         selectedStyle.Setters.Add(new Setter(BackgroundProperty,_p.Hover));
-        selectedStyle.Setters.Add(new Setter(BorderBrushProperty,_p.Semantic(SemanticColor.Selected)));
+        selectedStyle.Setters.Add(new Setter(BorderBrushProperty,_p.Muted));
         selectedStyle.Setters.Add(new Setter(BorderThicknessProperty,new Thickness(3,0,0,0)));
         _events.Styles.Add(selectedStyle);
         _events.SelectionChanged+=(_,_)=>{if(!_updatingLog && _events.SelectedItem is ListBoxItem{Tag:WireEvent item})SelectEvent(item);};
