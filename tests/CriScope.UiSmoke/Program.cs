@@ -56,6 +56,12 @@ public sealed class SmokeApp : Application
                         var target = new Session(new WireEvent {kind="hello",session=Guid.NewGuid().ToString("N"),clientId=client,captureId=capture,channel=channel,pid=99,name="test"});
                         Connected(target,true); return target;
                     }
+                    Session Platform(string platform, string name="Unity Player") => new(new WireEvent {kind="hello",session=Guid.NewGuid().ToString("N"),platform=platform,name=name});
+                    Check(ClientCardPresentation.Title(Platform("WindowsPlayer")) == "Windows 包" && ClientCardPresentation.PlatformKey(Platform("WindowsEditor")) == "unity", "Windows 包与 Editor 准确区分");
+                    Check(ClientCardPresentation.Title(Platform("OSXEditor")) == "Unity Editor" && ClientCardPresentation.PlatformKey(Platform("LinuxEditor")) == "unity", "所有桌面 Editor 使用 Unity 图标");
+                    Check(ClientCardPresentation.Title(Platform("Android")) == "Android" && ClientCardPresentation.Title(Platform("IPhonePlayer")) == "iOS", "移动平台识别");
+                    Check(ClientCardPresentation.Title(Platform("WindowsPlayer", "My Game")) == "My Game" && ClientCardPresentation.PlatformLabel(Platform("WindowsPlayer", "My Game")) == "Windows 包", "保留自定义客户端名和平台");
+                    Check(ClientCardPresentation.Title(Platform("")) == "未知平台" && ClientCardPresentation.Title(Platform("FuturePlatform")) == "FuturePlatform", "未知平台不误判为 Windows");
                     var native=Meta(clientId,"native"); var sdk=Meta(clientId,"sdk"); var other=Meta(Guid.NewGuid().ToString("N"),"native");
                     Check(ClientCardPresentation.Group([native,sdk,other]).Length==2 && ClientCardPresentation.Default([sdk,native])==native, "客户端按 ClientId 归组，默认原生通道，不按相同 PID 合并");
                     Check(ClientCardPresentation.Status([native,sdk])=="在线", "卡片明确标示在线");

@@ -624,7 +624,7 @@ public sealed partial class MainWindow : Window
             if(primary!=null) { var filter=_filter.Text; SelectSession(primary); _filter.Text=filter; return; }
         }
         if (_session == null && sessions.Length > 0 && ClientCardPresentation.Group(sessions).Length == 1) { SelectSession(ClientCardPresentation.Default(sessions)); return; }
-        var signature = string.Join("|", sessions.Select(s => $"{s.Id}/{s.IsReplay}/{s.Connected}/{s.Capturing}/{s.Recording}/{s.Name}")) + _session?.GetHashCode();
+        var signature = string.Join("|", sessions.Select(s => $"{s.Id}/{s.IsReplay}/{s.Connected}/{s.Capturing}/{s.Recording}/{s.Name}/{s.Platform}/{s.Endpoint}/{s.Pid}")) + _session?.GetHashCode();
         if (signature != _sessionSignature)
         {
             _sessionSignature = signature; _sessions.Children.Clear();
@@ -640,18 +640,25 @@ public sealed partial class MainWindow : Window
                 var preferred = ClientCardPresentation.Default(group);
                 bool selected = _session != null && group.Contains(_session);
                 var card = new StackPanel { Spacing = 6, Margin = new Thickness(8,3) };
-                var duplicateName = clientGroups.Count(other => string.Equals(ClientCardPresentation.Default(other).Name, preferred.Name, StringComparison.OrdinalIgnoreCase)) > 1;
-                var headingLine = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 6 };
-                var clientName = Label(string.IsNullOrWhiteSpace(preferred.Name) ? "未命名客户端" : preferred.Name, 13, _p.Text);
+                var duplicateName = clientGroups.Count(other => string.Equals(ClientCardPresentation.Title(ClientCardPresentation.Default(other)), ClientCardPresentation.Title(preferred), StringComparison.OrdinalIgnoreCase)) > 1;
+                var headingLine = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), ColumnSpacing = 7 };
+                var platformIcon = PlatformIcons.Glyph(ClientCardPresentation.PlatformKey(preferred), _p.Text, 17);
+                ToolTip.SetTip(platformIcon, ClientCardPresentation.PlatformLabel(preferred));
+                headingLine.Children.Add(platformIcon);
+                var clientName = Label(ClientCardPresentation.Title(preferred), 13, _p.Text);
+                Grid.SetColumn(clientName, 1);
                 clientName.FontWeight=selected?FontWeight.SemiBold:FontWeight.Normal;
                 clientName.TextTrimming = TextTrimming.CharacterEllipsis;
                 headingLine.Children.Add(clientName);
                 var cardStatus = ClientCardPresentation.Status(group);
                 var statusColor = cardStatus == "在线" || cardStatus == "记录中" ? _p.Good : cardStatus == "已断开" ? _p.Error : _p.Signal;
                 var status = Label("● " + cardStatus, 10, statusColor);
-                Grid.SetColumn(status, 1); headingLine.Children.Add(status);
+                Grid.SetColumn(status, 2); headingLine.Children.Add(status);
                 var lines = new StackPanel { Spacing = 8 };
                 lines.Children.Add(headingLine);
+                var platformLabel = ClientCardPresentation.PlatformLabel(preferred);
+                if (ClientCardPresentation.Title(preferred) != platformLabel)
+                    lines.Children.Add(Label(platformLabel, 10, _p.Muted));
                 var address=ClientCardPresentation.Address(preferred);
                 if(address!="IP 未提供")lines.Children.Add(Label(address, 11, _p.Text));
                 if (duplicateName && !preferred.IsReplay) lines.Children.Add(Label($"进程 {preferred.Pid}", 10, _p.Muted));
