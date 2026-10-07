@@ -853,6 +853,75 @@ public sealed class SmokeApp : Application
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/category-tracks-narrow.png"),window.CapturePng("window"));
                     window.Width=1480;window.ApplyUiAction("theme","light");await Task.Delay(250);
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/category-tracks-light.png"),window.CapturePng("window"));
+                    var previewClient=Guid.NewGuid().ToString("N");
+                    var previewSession=Meta(previewClient,"native","tracks-preview");
+                    var previewSdk=Meta(previewClient,"sdk","tracks-preview");
+                    sessions[previewSession.Id]=previewSession;sessions[previewSdk.Id]=previewSdk;
+                    previewSdk.Accept(new WireEvent {session=previewSdk.Id,seq=1,time=.1,observedTime=.1,kind="category-catalog",raw=JsonSerializer.Serialize(new {
+                        basis="acf-category-catalog",firstGroupNo=0,
+                        firstGroupCategories=new[]{new{groupNo=0,index=0,ordinal=0,name="Volume_Music"},
+                            new{groupNo=0,index=1,ordinal=1,name="Volume_SFX"},new{groupNo=0,index=2,ordinal=2,name="Volume_Voice"}}
+                    })});
+                    var previewEvents=new List<WireEvent>();
+                    void PreviewCue(string id,string name,double at,double? end,int category,
+                        (double Start,double? End,bool Unknown)[] voices,bool unknown=false,bool rejected=false)
+                    {
+                        previewEvents.Add(new WireEvent {kind="request",entity="cue",objectId=id,name=name,time=at,detail=unknown?"连接时已存在 Cue；起点未知":""});
+                        previewEvents.Add(new WireEvent {kind="category",entity="category",objectId="2:category-index:"+category,parentId=id,
+                            name=new[]{"Volume_Music","Volume_SFX","Volume_Voice"}[category],time=at+.03});
+                        for(var index=0;index<voices.Length;index++)
+                        {
+                            var item=voices[index];var voiceId=id+"-voice-"+index;
+                            previewEvents.Add(new WireEvent {kind="play",entity="voice",objectId=voiceId,parentId=id,name=name,time=item.Start,
+                                detail=item.Unknown?"连接时已存在 Voice；起点未知":""});
+                            if(item.End is {} ending)previewEvents.Add(new WireEvent {kind="stop",entity="voice",objectId=voiceId,parentId=id,name=name,time=ending});
+                        }
+                        if(end is {} endingAt)previewEvents.Add(new WireEvent {kind="stop",entity="cue",lifecycle="stopped",objectId=id,name=name,time=endingAt,
+                            endReason=rejected?"playback-limit":"natural"});
+                    }
+                    PreviewCue("preview-music","Music_Loop",.2,9.64,0,[(.24,8.0,false),(.55,9.6,false)]);
+                    PreviewCue("preview-click","UI_Click",1.1,1.36,1,[(1.12,1.34,false)]);
+                    PreviewCue("preview-footsteps","Footstep_Stone",2,4,1,[(2.02,2.22,false),(2.8,3.02,false),(3.5,3.71,false)]);
+                    PreviewCue("preview-line","Voice_Line",4.2,7.55,2,[(4.3,6.4,false),(4.35,7.5,false)]);
+                    PreviewCue("preview-unknown","Ambience_Unknown",6.6,null,1,[(6.6,null,true)],unknown:true);
+                    PreviewCue("preview-rejected","UI_Rejected",8.8,8.91,1,[],rejected:true);
+                    previewEvents.Add(new WireEvent {kind="gap",name="采集缺口",time=9.9});
+                    PreviewCue("preview-live","Music_Continue",10.1,null,0,[(10.12,null,false)]);
+                    previewEvents.Add(new WireEvent {kind="metric",name="CPU",time=12,value=1});
+                    long previewSeq=0;
+                    foreach(var item in previewEvents.OrderBy(item=>item.time))
+                    {item.session=previewSession.Id;item.seq=++previewSeq;item.observedTime=item.time;previewSession.Accept(item);}
+                    window.Width=1480;window.Height=840;window.ApplyUiAction("theme","dark");
+                    Select(previewSession);window.ApplyUiAction("workspace","Timeline");window.ApplyUiAction("range","0:12");
+                    window.ApplyUiAction("select",previewEvents.Single(item=>item.kind=="request"&&item.objectId=="preview-line").seq.ToString());
+                    if(Field<bool>("_showInspector"))Click(Field<Button>("_detailsToggle"));
+                    await Task.Delay(300);
+                    var previewTimeline=Field<TimelineControl>("_timeline");
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/tracks-preview-dark.png"),window.CapturePng("workspace"));
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/tracks-preview-window.png"),window.CapturePng("window"));
+                    var previewHits=(List<(Rect rect,WireEvent item)>)typeof(TimelineControl).GetField("_hits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(previewTimeline)!;
+                    Check(previewHits.Count(hit=>hit.item.objectId=="preview-music-voice-0")==1
+                        &&!previewHits.Any(hit=>hit.item.objectId=="preview-music-voice-1"&&hit.item.kind=="play"),
+                        "Cue主轨道合并重叠Voice，子声部端点不重复叠到主行");
+                    Check(previewHits.Count(hit=>hit.item.parentId=="preview-footsteps"&&hit.item.kind=="play")==3,
+                        "分离的声音活动在主行保留三个可点击区间");
+                    var requestHit=previewHits.Single(hit=>hit.item.kind=="request"&&hit.item.objectId=="preview-line"&&hit.rect.X>=214);
+                    Check(!previewHits.Any(hit=>hit.item.kind=="play"&&hit.item.parentId=="preview-line"&&hit.rect.Intersects(requestHit.rect)),
+                        "播放请求标记与实际声音区间具有独立点击区域");
+                    Check(!previewHits.Any(hit=>hit.item.objectId=="preview-unknown"&&hit.item.kind=="request"&&hit.rect.X>=214),
+                        "热接入的未知请求不伪装成真实请求时间点");
+                    window.ApplyUiAction("theme","light");await Task.Delay(220);
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/tracks-preview-light.png"),window.CapturePng("workspace"));
+                    window.ApplyUiAction("theme","dark");await Task.Delay(180);
+                    previewTimeline=Field<TimelineControl>("_timeline");
+                    previewTimeline.ShowVoiceDetails("preview-music");previewTimeline.ShowVoiceDetails("preview-footsteps");await Task.Delay(120);
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/tracks-preview-expanded.png"),window.CapturePng("workspace"));
+                    previewHits=(List<(Rect rect,WireEvent item)>)typeof(TimelineControl).GetField("_hits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(previewTimeline)!;
+                    Check(previewHits.Any(hit=>hit.item.objectId=="preview-music-voice-1"&&hit.item.kind=="play"),
+                        "展开Voice后仍可定位汇总中被重叠的精确声部起点");
+                    window.Width=980;Click(Field<Button>("_detailsToggle"));await Task.Delay(300);
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/tracks-preview-narrow.png"),window.CapturePng("window"));
+
                     Console.WriteLine($"结果：{passed}/{passed} UI 检查通过"); desktop.Shutdown(0);
                 }
                 catch (Exception ex) { Console.Error.WriteLine($"FAIL：已通过 {passed} 项；{ex}"); desktop.Shutdown(1); }

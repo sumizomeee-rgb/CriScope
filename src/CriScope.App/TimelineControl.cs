@@ -76,7 +76,7 @@ public sealed class TimelineControl : Control
             foreach(var group in PlaybackGroups().Where(g => g.End == null || g.End.time >= Start))
             {
                 if(group.Id == id) { if(item.entity == "voice") _expanded.Add("playback:" + id); break; }
-                _vertical += PlaybackRowHeight + (_expanded.Contains("playback:"+group.Id) ? Math.Max(1,group.Voices.Count(v=>v.LastOrDefault(e=>e.kind=="stop") is not {} stop || stop.time>=Start))*38 : 0);
+                _vertical += PlaybackRowHeight + (_expanded.Contains("playback:"+group.Id) ? Math.Max(1,group.Voices.Count(v=>v.LastOrDefault(e=>e.kind=="stop") is not {} stop || stop.time>=Start))*VoiceRowHeight : 0);
             }
         }
         else if(Mode == "AISAC")
@@ -131,6 +131,9 @@ public sealed class TimelineControl : Control
     private int _busCount, _busChannels;
     private readonly List<(Rect rect, WireEvent item)> _hits = [];
     private readonly List<(Rect rect, string tip)> _playbackTips = [];
+    private readonly List<Rect> _trackRows = [];
+    private readonly List<double> _majorGridXs = [];
+    private Rect? _hoverTrackRect;
     private readonly List<Rect> _relatedCueBounds = [];
     private readonly List<(Rect rect, string key)> _expandHits = [];
     private readonly HashSet<string> _expanded = [];
@@ -201,6 +204,7 @@ public sealed class TimelineControl : Control
     }
     private const double LabelWidth = UiMetrics.TimelineLabelWidth;
     private const double PlaybackRowHeight = 44;
+    private const double VoiceRowHeight = 28;
     private double PlotWidth => Math.Max(40, Bounds.Width-LabelWidth-22);
     private double MixingViewportHeight => Math.Max(1,Bounds.Height-106);
     private double MixingMaxScroll => Math.Max(0,_contentHeight+10-MixingViewportHeight);
@@ -216,6 +220,7 @@ public sealed class TimelineControl : Control
     private static readonly Typeface Font = new("Segoe UI, Microsoft YaHei UI");
     private static readonly Geometry ExpandedChevron=Geometry.Parse("M0,0 L4,4 L8,0");
     private static readonly Geometry CollapsedChevron=Geometry.Parse("M1,0 L5,4 L1,8");
+    private static readonly Geometry RequestDiamond=Geometry.Parse("M0,-3.5 L3.5,0 L0,3.5 L-3.5,0 Z");
     private void SelectTimeAxis(bool wall)
     {
         if(PreferWallTime==wall)return;
@@ -268,9 +273,19 @@ public sealed class TimelineControl : Control
     {
         bool had=_expanded.Contains(key);
         ToolTip.SetTip(this,null);ToolTip.SetIsOpen(this,false);
-        SetHoveredLink(null);
+        SetHoveredTrack(null);SetHoveredLink(null);
         if(key.StartsWith("spatial:",StringComparison.Ordinal)){foreach(var old in _expanded.Where(k=>k.StartsWith("spatial:",StringComparison.Ordinal)).ToArray())_expanded.Remove(old);_vertical=0;}
         if(had)_expanded.Remove(key);else _expanded.Add(key);InvalidateVisual();
+    }
+    private void SetHoveredTrack(Rect? rect)
+    {
+        if(_hoverTrackRect==rect)return;
+        _hoverTrackRect=rect;InvalidateVisual();
+    }
+    private void UpdateTrackHover(Point point)
+    {
+        var row=Mode=="Timeline"&&point.Y>=68?_trackRows.LastOrDefault(rect=>rect.Contains(point)):default;
+        SetHoveredTrack(row.Width>0?row:null);
     }
     private void SetHoveredLink(Rect? rect)
     {
@@ -302,7 +317,7 @@ public sealed class TimelineControl : Control
         ClipToBounds=true; Focusable=true; MinHeight=220;
         GotFocus += (_,_)=>{_axisKeyboardFocus=true;InvalidateVisual();};
         PointerWheelChanged += (_,e) => {
-            SetHoveredLink(null);
+            SetHoveredTrack(null);SetHoveredLink(null);
             if(Mode=="Location")
             {
                 if(SpatialOverlayBounds.Contains(e.GetPosition(this)))_vertical=Math.Clamp(_vertical-e.Delta.Y*34,0,SpatialOverlayMaxScroll);
@@ -368,11 +383,12 @@ public sealed class TimelineControl : Control
         PointerMoved += (_,e) => {
             var p=e.GetPosition(this);
             if(_drag==null&&!_spatialScrollDragging&&!_scrollDragging&&TimeAxisToggleVisible&&TimeAxisToggleBounds.Contains(p))
-            {SetHoveredToggle(null);SetHoveredLink(null);SetAxisToggleHovered(true);Cursor=LinkCursor;ToolTip.SetTip(this,TimeAxisToggleTip());return;}
+            {SetHoveredTrack(null);SetHoveredToggle(null);SetHoveredLink(null);SetAxisToggleHovered(true);Cursor=LinkCursor;ToolTip.SetTip(this,TimeAxisToggleTip());return;}
             if(_axisToggleHovered){SetAxisToggleHovered(false);Cursor=null;}
             if(_spatialScrollDragging){SetHoveredToggle(null);SetHoveredLink(null);SetSpatialScrollFromPointer(p.Y);e.Handled=true;return;}
             if(_scrollDragging){SetHoveredToggle(null);SetHoveredLink(null);SetMixingScrollFromPointer(p.Y);e.Handled=true;return;}
             if(Mode=="Location"&&SpatialOverlayBounds.Contains(p)){SetHoveredToggle(null);SetHoveredLink(null);ToolTip.SetTip(this,null);ToolTip.SetIsOpen(this,false);return;}
+            if(_drag==null)UpdateTrackHover(p);else SetHoveredTrack(null);
             var toggle=_drag==null?_toggleHits.LastOrDefault(h=>h.rect.Contains(p)):default;
             SetHoveredToggle(toggle.key==null?null:toggle.rect);
             if(toggle.key!=null){SetHoveredLink(null);Cursor=LinkCursor;ToolTip.SetTip(this,ToggleTip(toggle.key));return;}
@@ -389,7 +405,7 @@ public sealed class TimelineControl : Control
             else{SelectionStart=Start+Math.Clamp((start.X-LabelWidth)/PlotWidth,0,1)*ViewSpan;SelectionEnd=Start+Math.Clamp((p.X-LabelWidth)/PlotWidth,0,1)*ViewSpan;}
             ViewChanged?.Invoke();InvalidateVisual();
         };
-        PointerExited += (_,_)=>{SetAxisToggleHovered(false);SetHoveredToggle(null);SetHoveredLink(null);Cursor=null;ToolTip.SetTip(this,null);};
+        PointerExited += (_,_)=>{SetHoveredTrack(null);SetAxisToggleHovered(false);SetHoveredToggle(null);SetHoveredLink(null);Cursor=null;ToolTip.SetTip(this,null);};
         PointerReleased += (_,e)=>{_drag=null;_scrollDragging=false;_spatialScrollDragging=false;e.Pointer.Capture(null);};
         KeyDown += (_,e)=>{if(e.Key==Key.Enter&&_axisKeyboardFocus&&TimeAxisToggleVisible){SelectTimeAxis(!PreferWallTime);e.Handled=true;}else if(e.Key==Key.Escape&&Mode=="Location"&&_spatialExpandedKey!=null){CloseSpatialList();e.Handled=true;}else if(e.Key==Key.Space){_space=true;e.Handled=true;}};
         KeyUp += (_,e)=>{if(e.Key==Key.Space){_space=false;e.Handled=true;}};
@@ -417,7 +433,7 @@ public sealed class TimelineControl : Control
     {Text(c,title,26,105,Palette.Text,18);Text(c,description,26,141,size:12);}
     public override void Render(DrawingContext c)
     {
-        base.Render(c);c.FillRectangle(Palette.Canvas,new Rect(Bounds.Size));_links.Clear();_hits.Clear();_playbackTips.Clear();_relatedCueBounds.Clear();_expandHits.Clear();_toggleHits.Clear();_spatialHits.Clear();_spatialListHits.Clear();SpatialOverlayBounds=default;SpatialOverlayMaxScroll=0;_spatialExpandedKey=null;
+        base.Render(c);c.FillRectangle(Palette.Canvas,new Rect(Bounds.Size));_links.Clear();_hits.Clear();_playbackTips.Clear();_relatedCueBounds.Clear();_expandHits.Clear();_toggleHits.Clear();_spatialHits.Clear();_spatialListHits.Clear();_trackRows.Clear();_majorGridXs.Clear();SpatialOverlayBounds=default;SpatialOverlayMaxScroll=0;_spatialExpandedKey=null;
         if(Events.Length==0&&SupplementMetrics.Length==0){Empty(c,"等待音频观测","在游戏里开启 CriScope 采集，或打开已有日志。");return;}
         if(Mode=="Location"){DrawLocations(c);return;}if(Mode=="Mixing"){DrawMixing(c);DrawScrollHint(c);return;}
         var axisStart=Math.Max(TimeOrigin,Start);
@@ -426,18 +442,21 @@ public sealed class TimelineControl : Control
         {
             var step=WallTickStep(ViewSpan,PlotWidth);
             var wallStart=clockStart.ToUnixTimeMilliseconds()/1000d;
-            for(double seconds=Math.Ceiling(wallStart/step)*step;seconds<=wallStart+(End-axisStart)+step*.000001;seconds+=step)
+            var wallEnd=wallStart+(End-axisStart);
+            for(double seconds=Math.Ceiling(wallStart/step)*step;seconds<=wallEnd+step*.000001;seconds+=step)
             {
                 var t=axisStart+seconds-wallStart;var x=X(t);
-                c.DrawLine(new Pen(Palette.TimelineGrid,.6),new Point(x,34),new Point(x,Bounds.Height-28));
                 var wall=DateTimeOffset.FromUnixTimeMilliseconds((long)Math.Round(seconds*1000));
-                Text(c,WallTickLabel(wall,step),x+4,10,size:10);
+                DrawRulerMark(c,x,WallTickLabel(wall,step));
             }
+            if(Mode=="Timeline")DrawMinorRulerMarks(c,wallStart,wallEnd,step,seconds=>X(axisStart+seconds-wallStart));
         }
         else
         {
             double step=Math.Pow(10,Math.Floor(Math.Log10(ViewSpan/8)));if(ViewSpan/step>16)step*=5;else if(ViewSpan/step>10)step*=2;
-            for(double t=Math.Max(TimeOrigin,TimeOrigin+Math.Ceiling((Start-TimeOrigin)/step)*step);t<=End;t+=step){var x=X(t);c.DrawLine(new Pen(Palette.TimelineGrid,.6),new Point(x,34),new Point(x,Bounds.Height-28));Text(c,Stamp(t),x+4,10,size:10);}
+            for(double t=Math.Max(TimeOrigin,TimeOrigin+Math.Ceiling((Start-TimeOrigin)/step)*step);t<=End;t+=step)
+                DrawRulerMark(c,X(t),Stamp(t));
+            if(Mode=="Timeline")DrawMinorRulerMarks(c,axisStart-TimeOrigin,End-TimeOrigin,step,seconds=>X(TimeOrigin+seconds));
         }
         c.DrawLine(new Pen(Palette.Border),new Point(0,UiMetrics.TimelineRulerHeight),new Point(Bounds.Width,UiMetrics.TimelineRulerHeight));
         DrawTimeAxisToggle(c);
@@ -450,17 +469,37 @@ public sealed class TimelineControl : Control
                 c.DrawLine(new Pen(Palette.Selection,1.5),new Point(x,28),new Point(x,34));
                 c.DrawEllipse(Palette.Selection,null,new Point(x,28),2,2);
             }
-            else c.DrawLine(new Pen(Palette.Selection,1),new Point(x,35),new Point(x,Bounds.Height-28));
+            else c.DrawLine(new Pen(Mode=="Timeline"?Palette.Muted:Palette.Selection,Mode=="Timeline"?.6:1),new Point(x,35),new Point(x,Bounds.Height-28));
         }
         if(Mode=="AISAC")DrawControls(c);else if(Mode=="Performance")DrawResources(c);else DrawTracks(c);
         c.FillRectangle(Palette.Canvas,new Rect(0,Bounds.Height-28,Bounds.Width,28));Text(c,"Ctrl 缩放 · 空格拖动 · Shift 选区",16,Bounds.Height-20,size:10);
         if(Live)Text(c,SourceConnected?"实时":"已断开",Bounds.Width-64,Bounds.Height-21,SourceConnected?Palette.Good:Palette.Request,10);
     }
+    private void DrawRulerMark(DrawingContext c,double x,string label)
+    {
+        _majorGridXs.Add(x);
+        c.DrawLine(new Pen(Palette.TimelineGrid,Mode=="Timeline"?.5:.6),new Point(x,34),new Point(x,Bounds.Height-28));
+        c.DrawLine(new Pen(Palette.Muted,.8),new Point(x,28),new Point(x,34));
+        using(c.PushClip(new Rect(LabelWidth,0,Math.Max(0,Bounds.Width-LabelWidth),34)))
+            Text(c,label,x+4,10,size:10);
+    }
+    private void DrawMinorRulerMarks(DrawingContext c,double first,double last,double step,Func<double,double> map)
+    {
+        if(PlotWidth*step/ViewSpan<45)return;
+        var minor=step/5;
+        for(var index=Math.Ceiling(first/minor);index*minor<=last+minor*.000001;index++)
+        {
+            if(Math.Abs(index%5)<.001)continue;
+            var x=map(index*minor);
+            c.DrawLine(new Pen(Palette.Border,.7),new Point(x,31),new Point(x,34));
+        }
+    }
+
     private void DrawTracks(DrawingContext c)
     {
-        Text(c,"播放实例",16,45,Palette.Text,12);
+        Text(c,"播放实例",16,45,Palette.Muted,11);
         Text(c,"声音活动",LabelWidth+10,45,Palette.Muted,11);
-        c.DrawLine(new Pen(Palette.TimelineGrid,1),new Point(LabelWidth,34),new Point(LabelWidth,Bounds.Height-28));
+        c.DrawLine(new Pen(Palette.TimelineGrid,.7),new Point(LabelWidth,34),new Point(LabelWidth,Bounds.Height-28));
         var groups=PlaybackGroups();
         double y=75-_vertical;int row=0;
         using var clip=c.PushClip(new Rect(0,68,Bounds.Width,Math.Max(0,Bounds.Height-96)));
@@ -472,91 +511,152 @@ public sealed class TimelineControl : Control
             if(anchor==null)continue;
             var key="playback:"+group.Id;bool expanded=_expanded.Contains(key);
             var voiceRows=expanded?group.Voices.Where(v=>v.LastOrDefault(e=>e.kind=="stop") is not {} stop||stop.time>=Start).ToArray():[];
-            double h=PlaybackRowHeight+(expanded?Math.Max(1,voiceRows.Length)*38:0);
+            double h=PlaybackRowHeight+(expanded?Math.Max(1,voiceRows.Length)*VoiceRowHeight:0);
             if(!VisibleRow(y,h)){y+=h;row+=1+(expanded?Math.Max(1,voiceRows.Length):0);continue;}
-            if(row++%2==0)c.FillRectangle(Palette.Alternate,new Rect(0,y,LabelWidth,PlaybackRowHeight));
-            var selectedId = Selected?.entity == "voice" ? Selected.parentId : Selected?.objectId;
-            if(selectedId == group.Id) HighlightRow(c,new Rect(1,y+1,Bounds.Width-22,PlaybackRowHeight-2));
+            var selectedId=Selected?.entity=="voice"?Selected.parentId:Selected?.objectId;
+            bool selected=selectedId==group.Id;
+            DrawTrackRow(c,y,PlaybackRowHeight,row++,selected);
             var categories=CategoriesFor(group,anchor);
             var primaryCategory=PrimaryCategoryFor(group,categories);
             var categoryBrush=primaryCategory is null?Palette.Muted:Palette.Category(primaryCategory.Ordinal);
             if(primaryCategory!=null)c.FillRectangle(categoryBrush,new Rect(5,y+8,3,28));
             using(c.PushTransform(Matrix.CreateTranslation(15,y+18)))
                 c.DrawGeometry(null,new Pen(Palette.Muted,1.2),expanded?ExpandedChevron:CollapsedChevron);
-            using(c.PushClip(new Rect(29,y+2,LabelWidth-39,18)))
-                Text(c,Elide(group.Name,LabelWidth-42,12),30,y+3,Palette.Text,12);
+            using(c.PushClip(new Rect(29,y+2,LabelWidth-39,20)))
+                Text(c,Elide(group.Name,LabelWidth-42,12),30,y+4,Palette.Text,12);
             var status=!SourceConnected&&group.ActiveVoiceCount>0?"已断开 · 保留最后状态":group.StatusLabel;
             var duration=group.DurationAt(End);
             var durationText=duration is {} seconds?seconds.ToString("0.000",CultureInfo.InvariantCulture)+" 秒":"";
             var categoryText=string.Join(" / ",categories.Select(e=>e.name));
             var summary=string.Join(" · ",new[]{status,durationText}.Where(text=>text.Length>0));
-            using(c.PushClip(new Rect(29,y+19,LabelWidth-39,20)))
-                Text(c,Elide(summary,LabelWidth-40,10),30,y+23,group.ActiveVoiceCount>0&&SourceConnected?Palette.Request:Palette.Muted,10);
+            using(c.PushClip(new Rect(29,y+20,LabelWidth-39,20)))
+                Text(c,Elide(summary,LabelWidth-40,10),30,y+25,group.ActiveVoiceCount>0&&SourceConnected?Palette.Request:Palette.Muted,10);
             string FullStamp(double time)=>ClockTimeAt?.Invoke(time) is { } wall
-                ? wall.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.fff",CultureInfo.InvariantCulture) : Stamp(time);
+                ? wall.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.fff",CultureInfo.InvariantCulture):Stamp(time);
             var endedLabel=group.EndedAt??group.InstanceEndedAt;
             var fullTime=group.StartedAt is {} started?"开始播放："+FullStamp(started):"开始播放：未记录";
             if(group.RequestAt is {} requestedAt)fullTime="请求播放："+FullStamp(requestedAt)+"\n"+fullTime;
             if(endedLabel is {} endedTime)fullTime+="\n结束播放："+FullStamp(endedTime);
             var tip=group.Name+"\n"+summary+(categoryText.Length>0?"\nCategory："+categoryText:"\nCategory：实例归属未记录")+"\n"+fullTime;
-            var visibleTop=Math.Max(y,68);
-            var visibleBottom=Math.Min(y+PlaybackRowHeight,Bounds.Height-28);
-            if(visibleBottom>visibleTop)_playbackTips.Add((new Rect(4,visibleTop,Math.Max(0,Bounds.Width-26),visibleBottom-visibleTop),tip));
-            _expandHits.Add((new Rect(9,y,17,PlaybackRowHeight),key));_hits.Add((new Rect(27,y,LabelWidth-27,PlaybackRowHeight),anchor));
-            // A Cue request is a point observation, not evidence of continuous voice allocation.
-            if(group.Request is {} request&&request.time>=Start&&request.time<=End)
+            AddTrackTip(y,PlaybackRowHeight,tip);
+            _expandHits.Add((new Rect(9,y,17,PlaybackRowHeight),key));
+            _hits.Add((new Rect(27,y,LabelWidth-27,PlaybackRowHeight),anchor));
+            var ranges=group.VoiceIntervals.Select(interval=>PlaybackActivityPresentation.Voice(
+                interval.Begin,interval.End,group.End,End,Discontinuities)).ToArray();
+            foreach(var range in PlaybackActivityPresentation.Union(ranges))
+                DrawActivity(c,range,y,PlaybackRowHeight,categoryBrush,selected,false);
+            // Requests occupy a separate strip above activity, including requests which never allocate a Voice.
+            if(group.Request is {} request&&!PlaybackPresentation.IsUnknownStart(request)&&request.time>=Start&&request.time<=End)
             {
-                var px=X(request.time);var py=y+PlaybackRowHeight/2;var pen=new Pen(Palette.Request,1.5);
-                c.DrawLine(pen,new Point(px,py-6),new Point(px+5,py));c.DrawLine(pen,new Point(px+5,py),new Point(px,py+6));
-                c.DrawLine(pen,new Point(px,py+6),new Point(px-5,py));c.DrawLine(pen,new Point(px-5,py),new Point(px,py-6));
-                if(IsSelected(request))c.DrawEllipse(null,new Pen(Palette.Selection,2),new Point(px,py),9,9);
-                _hits.Add((new Rect(px-6,y,12,PlaybackRowHeight),request));
+                var px=X(request.time);var py=y+8;var pen=new Pen(IsSelected(request)?Palette.Text:Palette.Request,IsSelected(request)?1.8:1.2);
+                using(c.PushClip(new Rect(LabelWidth,y,PlotWidth,PlaybackRowHeight)))
+                using(c.PushTransform(Matrix.CreateTranslation(px,py)))
+                    c.DrawGeometry(IsSelected(request)?Palette.Request:Palette.Canvas,pen,RequestDiamond);
+                _hits.Add((new Rect(Math.Max(LabelWidth,px-6),y+1,Math.Min(12,LabelWidth+PlotWidth-Math.Max(LabelWidth,px-6)),12),request));
             }
-            foreach(var interval in group.VoiceIntervals)
-                DrawInterval(interval.Begin,interval.End,group.End,y,PlaybackRowHeight,
-                    categoryBrush,interval.Begin.kind!="play"||PlaybackPresentation.IsUnknownStart(interval.Begin));
+            if(selected&&Selected is {} point&&point.kind!="request"&&point.time>=Start&&point.time<=End)
+            {
+                var x=X(point.time);
+                using(c.PushClip(new Rect(LabelWidth,y,PlotWidth,PlaybackRowHeight)))
+                    c.DrawRectangle(Palette.Text,null,new Rect(x-1,y+14,2,16),1,1);
+            }
             y+=PlaybackRowHeight;
             if(!expanded)continue;
             foreach(var voice in voiceRows)
             {
                 var begin=voice.FirstOrDefault(e=>e.kind=="play")??voice[0];var stop=voice.LastOrDefault(e=>e.kind=="stop");
-                if(!VisibleRow(y,38)){y+=38;row++;continue;}
-                if(row++%2==0)c.FillRectangle(Palette.Alternate,new Rect(0,y,LabelWidth,38));
-                bool unknown=begin.kind!="play"||PlaybackPresentation.IsUnknownStart(begin);
-                Text(c,"↳ Voice "+(Array.IndexOf(group.Voices,voice)+1),28,y+3,Palette.Voice,11);
-                var state=stop!=null?"已结束":group.End!=null?"实例已结束":group.HasEvidenceGap?"采集中断":SourceConnected?"播放中":"已断开";
-                var elapsed=stop!=null&&!unknown?(stop.time-begin.time).ToString("0.000",CultureInfo.InvariantCulture)+" 秒":unknown?"开始时间未记录":"+"+Stamp(begin.time);
-                Text(c,state+" · "+elapsed,28,y+21,size:9);
-                DrawInterval(begin,stop,group.End,y,38,Palette.Voice,unknown);
-                _hits.Add((new Rect(24,y,LabelWidth-24,38),begin));y+=38;
+                if(!VisibleRow(y,VoiceRowHeight)){y+=VoiceRowHeight;row++;continue;}
+                bool voiceSelected=Selected is {} current&&voice.Any(item=>item.session==current.session&&item.seq==current.seq);
+                DrawTrackRow(c,y,VoiceRowHeight,row++,voiceSelected);
+                var range=PlaybackActivityPresentation.Voice(begin,stop,group.End,End,Discontinuities);
+                var voiceNumber=Array.IndexOf(group.Voices,voice)+1;
+                c.DrawLine(new Pen(Palette.Border,.8),new Point(28,y),new Point(28,y+VoiceRowHeight/2));
+                c.DrawLine(new Pen(Palette.Border,.8),new Point(28,y+VoiceRowHeight/2),new Point(35,y+VoiceRowHeight/2));
+                Text(c,"Voice "+voiceNumber,40,y+7,Palette.Muted,11);
+                var state=range.Gap!=null?"采集中断":stop!=null?"已结束":group.End!=null?"实例已结束":SourceConnected?"播放中":"已断开";
+                var detail=range.Gap!=null?"采集中断":range.UnknownStart?"起点未记录":stop!=null?(stop.time-begin.time).ToString("0.000",CultureInfo.InvariantCulture)+" 秒":state;
+                using(c.PushClip(new Rect(94,y+3,LabelWidth-104,VoiceRowHeight-4)))
+                    Text(c,Elide(detail,LabelWidth-106,10),94,y+8,range.Continues&&SourceConnected?Palette.Request:Palette.Muted,10);
+                DrawActivity(c,range,y,VoiceRowHeight,categoryBrush,voiceSelected,true);
+                _hits.Add((new Rect(36,y,LabelWidth-36,VoiceRowHeight),begin));
+                AddTrackTip(y,VoiceRowHeight,group.Name+" · Voice "+voiceNumber+"\n"+state+
+                    "\n开始播放："+(range.UnknownStart?"未记录":FullStamp(begin.time))+
+                    (range.Gap!=null?"\n采集中断："+FullStamp(range.End):range.EndEvent!=null?"\n"+(range.HasObservedEnd?"声音结束：":"实例结束：")+FullStamp(range.End):"\n声音活动延续到观测末端"));
+                y+=VoiceRowHeight;
             }
-            if(voiceRows.Length==0){Text(c,group.Voices.Length==0?"此请求没有关联的 Voice 记录":"当前范围没有 Voice 区间",28,y+10,size:10);y+=38;}
+            if(voiceRows.Length==0)
+            {
+                DrawTrackRow(c,y,VoiceRowHeight,row++,false);
+                Text(c,group.Voices.Length==0?"没有关联的 Voice 记录":"当前范围没有 Voice 区间",40,y+8,size:10);y+=VoiceRowHeight;
+            }
         }
         _contentHeight=y+_vertical-75;
         if(row==0)Empty(c,"当前范围没有播放实例","可调整时间范围查看历史。");
+    }
 
-        void DrawInterval(WireEvent begin,WireEvent? voiceStop,WireEvent? instanceEnd,double top,double height,IBrush brush,bool unknown)
+    private void AddTrackTip(double y,double height,string tip)
+    {
+        var top=Math.Max(y,68);var bottom=Math.Min(y+height,Bounds.Height-28);
+        if(bottom>top)_playbackTips.Add((new Rect(4,top,Math.Max(0,Bounds.Width-26),bottom-top),tip));
+    }
+
+    private void DrawTrackRow(DrawingContext c,double y,double height,int row,bool selected)
+    {
+        var rect=new Rect(1,y+1,Math.Max(0,Bounds.Width-23),height-2);
+        _trackRows.Add(rect);
+        if(selected)c.FillRectangle(Palette.Hover,rect);
+        else if(_hoverTrackRect==rect)c.FillRectangle(Palette.WorkspaceHover,rect);
+        else if(row%2==0)c.FillRectangle(Palette.Alternate,new Rect(0,y,Math.Max(0,Bounds.Width-22),height));
+        foreach(var x in _majorGridXs)
+            c.DrawLine(new Pen(Palette.TimelineGrid,.5),new Point(x,y),new Point(x,y+height));
+        c.DrawLine(new Pen(Palette.TimelineGrid,.7),new Point(LabelWidth,y),new Point(LabelWidth,y+height));
+        if(Selected is {} cursor&&cursor.time>=Start&&cursor.time<=End)
+            c.DrawLine(new Pen(Palette.Muted,.6),new Point(X(cursor.time),y),new Point(X(cursor.time),y+height));
+    }
+
+    private void DrawActivity(DrawingContext c,PlaybackActivityRange range,double y,double rowHeight,
+        IBrush brush,bool selected,bool voice)
+    {
+        if(range.End<Start||range.Start>End)return;
+        var left=Math.Max(LabelWidth,X(range.Start));var right=Math.Min(LabelWidth+PlotWidth,X(range.End));
+        if(right<left)return;
+        var center=y+rowHeight/2;var barHeight=voice?5:12;var cap=voice?5:8;
+        var rect=new Rect(left,center-barHeight/2,Math.Max(2,right-left),barHeight);
+        using(c.PushClip(new Rect(LabelWidth,y,PlotWidth,rowHeight)))
         {
-            if(!VisibleRow(top,height))return;
-            var stop=voiceStop;
-            if(instanceEnd!=null&&(stop==null||instanceEnd.time<stop.time))stop=instanceEnd;
-            var end=Math.Min(stop?.time??End,End);
-            var gap=Discontinuities.Where(d=>(d.session.Length==0||begin.session.Length==0||d.session==begin.session)
-                &&(d.channel.Length==0||begin.channel.Length==0||d.channel==begin.channel)
-                &&(d.time>begin.time||d.time==begin.time&&d.seq>begin.seq)&&d.time<end).MinBy(d=>d.time);
-            if(gap!=null){end=gap.time;stop=null;}
-            var left=Math.Max(LabelWidth,X(begin.time));var right=Math.Min(LabelWidth+PlotWidth,X(end));
-            if(right<left)return;
-            var center=top+height/2;var width=Math.Max(2,right-left);
-            c.FillRectangle(brush,new Rect(left,center-3,width,6));
-            if(unknown){c.DrawLine(new Pen(brush,1.5),new Point(left+7,center-6),new Point(left,center));c.DrawLine(new Pen(brush,1.5),new Point(left,center),new Point(left+7,center+6));}
-            else if(begin.time>=Start)c.DrawLine(new Pen(brush,2),new Point(left,center-9),new Point(left,center+9));
-            if(stop!=null)c.DrawLine(new Pen(Palette.Muted,2),new Point(right,center-9),new Point(right,center+9));
-            else c.DrawEllipse(Palette.Canvas,new Pen(brush,1.5),new Point(right,center),4,4);
-            if(IsSelected(begin)&&begin.time>=Start)c.DrawEllipse(null,new Pen(Palette.Selection,2),new Point(left,center),11,11);
-            if(stop!=null&&IsSelected(stop))c.DrawEllipse(null,new Pen(Palette.Selection,2),new Point(right,center),11,11);
-            _hits.Add((new Rect(left,top,Math.Max(8,right-left),height),begin));
-            if(stop!=null)_hits.Add((new Rect(right-5,top,10,height),stop));
+            using(c.PushOpacity(voice?.55:selected?.9:Palette.Light?.74:.72))
+                c.DrawRectangle(brush,null,rect,voice?1:2,voice?1:2);
+            if(selected)c.DrawRectangle(null,new Pen(Palette.Text,1),rect,voice?1:2,voice?1:2);
+
+            if(range.UnknownStart)
+            {
+                c.DrawLine(new Pen(brush,1.4),new Point(left+4,center-cap+1),new Point(left,center));
+                c.DrawLine(new Pen(brush,1.4),new Point(left,center),new Point(left+4,center+cap-1));
+            }
+            else if(range.Start>=Start)
+                c.DrawLine(new Pen(brush,1.4),new Point(left,center-cap),new Point(left,center+cap));
+            else DrawContinuation(left+3,false);
+            if(range.Gap!=null||range.EndEvent!=null&&!range.HasObservedEnd)DrawBreak(right-5);
+            else if(range.EndEvent!=null)c.DrawLine(new Pen(Palette.Muted,1.4),new Point(right,center-cap),new Point(right,center+cap));
+            else DrawContinuation(right-3,true);
+            if(voice&&Selected is {} point&&(IsSelected(range.Begin)||range.EndEvent!=null&&IsSelected(range.EndEvent))&&point.time>=Start&&point.time<=End)
+                c.FillRectangle(Palette.Text,new Rect(X(point.time)-1,center-cap,2,cap*2));
+        }
+        _hits.Add((new Rect(left,center-(voice?9:8),Math.Max(1,right-left),voice?18:16),range.Begin));
+        if(range.EndEvent!=null&&range.End>=Start&&range.End<=End)
+            _hits.Add((new Rect(Math.Max(LabelWidth,right-5),center-(voice?9:8),Math.Min(10,LabelWidth+PlotWidth-Math.Max(LabelWidth,right-5)),voice?18:16),range.EndEvent));
+
+        void DrawContinuation(double x,bool forward)
+        {
+            var direction=forward?1:-1;var extent=voice?2.5:3.5;
+            c.DrawLine(new Pen(brush,1.2),new Point(x-direction*2,center-extent),new Point(x+direction,center));
+            c.DrawLine(new Pen(brush,1.2),new Point(x+direction,center),new Point(x-direction*2,center+extent));
+        }
+        void DrawBreak(double x)
+        {
+            c.DrawLine(new Pen(Palette.Canvas,2.5),new Point(x-2,center+barHeight/2),new Point(x+1,center-barHeight/2));
+            c.DrawLine(new Pen(brush,1.2),new Point(x-2,center+cap-1),new Point(x+1,center-cap+1));
+            c.DrawLine(new Pen(brush,1.2),new Point(x+2,center+cap-1),new Point(x+5,center-cap+1));
         }
     }
 

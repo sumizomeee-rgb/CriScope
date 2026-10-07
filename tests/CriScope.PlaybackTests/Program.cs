@@ -60,6 +60,25 @@ var sdkEarlyGap=E("gap","","",0.9);sdkEarlyGap.session="sdk";sdkEarlyGap.channel
 Check(PlaybackPresentation.ControlsFor(One(nativeRequest,nativeVoice),[a0,sdkEarlyGap],20).BeforeStart.Contains(a0), "SDK缺口不清除原生Player历史设置");
 Check(One(release).StatusLabel.Contains("记录不完整"), "只有Cue结束时不宣称从未分配Voice");
 
+var activity = PlaybackActivityPresentation.Union(One(request,voice,stop,overlapping,overlappingEnd).VoiceIntervals
+    .Select(item=>PlaybackActivityPresentation.Voice(item.Begin,item.End,null,20,[])));
+Check(activity is [{Start:1.1,End:4}] && activity[0].EndEvent==overlappingEnd, "重叠 Voice 汇总为一个真实活动区间，末端保留最后释放证据");
+var separateVoice=E("play","voice","v3",5,"p1");var separateEnd=E("stop","voice","v3",6,"p1");
+var separated=PlaybackActivityPresentation.Union(activity.Append(PlaybackActivityPresentation.Voice(separateVoice,separateEnd,null,20,[])));
+Check(separated.Length==2&&separated[0].End==4&&separated[1].Start==5,"Cue 汇总保留没有 Voice 活动的空白间隙");
+var interrupted=PlaybackActivityPresentation.Voice(voice,null,null,20,[gap]);
+Check(interrupted.End==2&&interrupted.Gap==gap&&interrupted.EndEvent==null&&!interrupted.Continues,"采集缺口是未知边界，不画成真实声音结束或持续播放");
+var activityRecovered=E("play","voice","recovered",2,"p1",20);
+Check(PlaybackActivityPresentation.Union([interrupted,PlaybackActivityPresentation.Voice(activityRecovered,stop,null,20,[])]).Length==2,
+    "汇总不跨越同一时间的采集断口合并活动");
+var clipped=PlaybackActivityPresentation.Voice(voice,stop,null,2,[]);
+Check(clipped.End==2&&clipped.Continues&&clipped.EndEvent==null,"窗口末端前没有真实释放时显示延续形状");
+var cueBoundary=PlaybackActivityPresentation.Voice(voice,null,release,20,[]);
+Check(cueBoundary.End==3.2&&!cueBoundary.HasObservedEnd&&cueBoundary.EndEvent==release,"Cue释放只限定活动边界，不冒充真实Voice释放");
+Check(PlaybackActivityPresentation.Voice(nativeVoice,null,null,20,[sdkGap]).Continues,"SDK缺口不截断原生声音活动区间");
+Check(PlaybackActivityPresentation.Voice(prior,null,null,20,[]).UnknownStart,"未知起点区间保留其证据语义");
+Check(PlaybackActivityPresentation.Union([]).Length==0,"请求没有 Voice 时主行不伪造活动区间");
+
 WireEvent History(string kind, string entity, string id, long seq, string parent = "", string name = "Cue") =>
     new() { kind = kind, entity = entity, objectId = id, parentId = parent, seq = seq,
         time = seq, session = "history", channel = "native", epoch = 1, name = name };
