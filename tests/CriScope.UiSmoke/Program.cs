@@ -922,6 +922,39 @@ public sealed class SmokeApp : Application
                     window.Width=980;Click(Field<Button>("_detailsToggle"));await Task.Delay(300);
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/tracks-preview-narrow.png"),window.CapturePng("window"));
 
+                    // Minimized capture from the reported Windows Player session. Native ids include epoch prefixes;
+                    // the first ACF catalog had not reached the receiver, while associated CueInfo was already available.
+                    using var runtimeFixture=JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,"Fixtures","category-runtime.json")));
+                    var runtimeRoot=runtimeFixture.RootElement;
+                    var runtimeNative=new Session(WireEvent.Parse(runtimeRoot.GetProperty("nativeHello").GetRawText()));
+                    var runtimeSdk=new Session(WireEvent.Parse(runtimeRoot.GetProperty("sdkHello").GetRawText()));
+                    foreach(var item in runtimeRoot.GetProperty("native").EnumerateArray())runtimeNative.Accept(WireEvent.Parse(item.GetRawText()));
+                    foreach(var item in runtimeRoot.GetProperty("sdk").EnumerateArray())runtimeSdk.Accept(WireEvent.Parse(item.GetRawText()));
+                    Connected(runtimeNative,true);Connected(runtimeSdk,true);
+                    sessions[runtimeNative.Id]=runtimeNative;sessions[runtimeSdk.Id]=runtimeSdk;
+                    window.Width=1400;window.Height=850;window.ApplyUiAction("theme","dark");
+                    Select(runtimeNative);window.ApplyUiAction("workspace","Timeline");
+                    window.ApplyUiAction("range",FormattableString.Invariant($"{runtimeNative.LastTime-30}:{runtimeNative.LastTime}"));
+                    var runtimeRequest=runtimeNative.ViewSnapshot().Single(item=>item.kind=="request"&&item.name=="g_ui_default");
+                    window.ApplyUiAction("select",runtimeRequest.seq.ToString());
+                    if(!Field<bool>("_showInspector"))Click(Field<Button>("_detailsToggle"));
+                    await Task.Delay(250);
+                    var runtimeTimeline=Field<TimelineControl>("_timeline");
+                    var runtimeSnapshot=Field<WireEvent[]>("_snapshot");
+                    var runtimeGroups=PlaybackPresentation.Group(runtimeSnapshot,runtimeNative.LastTime);
+                    var runtimeResolve=typeof(TimelineControl).GetMethod("PrimaryCategoryFor",BindingFlags.Instance|BindingFlags.NonPublic)!;
+                    Check(!runtimeSnapshot.Any(item=>item.kind=="category-catalog")&&runtimeGroups.Length==3&&runtimeGroups.All(group=>
+                        runtimeResolve.Invoke(runtimeTimeline,[group,runtimeSnapshot.Where(item=>item.kind=="category"&&item.parentId==group.Id).ToArray()])
+                            is PrimaryGroupCategory color&&color.Ordinal==(group.Name=="m_ablum_ev0_1_0_1"?0:1)),
+                        "真实采集的批次前缀实例，在目录尚未到达时仍通过关联CueInfo识别Music/SFX颜色");
+                    var runtimeInfos=(Dictionary<string,WireEvent>)typeof(TimelineControl).GetField("_cueInfoByPlayback",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(runtimeTimeline)!;
+                    Check(runtimeGroups.All(group=>runtimeInfos.ContainsKey(group.Id)),"SDK元数据索引保留完整原生实例ID，不因epoch前缀丢失关联");
+                    Check(runtimeGroups.Where(group=>group.Name.StartsWith("g_ui",StringComparison.Ordinal)).All(group=>group.End!=null&&group.StatusLabel=="已结束"),"现场回归保留真实Cue释放与Voice结束，不将已结束实例显示为等待释放");
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/tracks-runtime-workspace.png"),window.CapturePng("workspace"));
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/tracks-runtime-fixed.png"),window.CapturePng("window"));
+                    window.ApplyUiAction("theme","light");await Task.Delay(180);
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/tracks-runtime-fixed-light.png"),window.CapturePng("window"));
+
                     Console.WriteLine($"结果：{passed}/{passed} UI 检查通过"); desktop.Shutdown(0);
                 }
                 catch (Exception ex) { Console.Error.WriteLine($"FAIL：已通过 {passed} 项；{ex}"); desktop.Shutdown(1); }

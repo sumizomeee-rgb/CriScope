@@ -175,7 +175,7 @@ public sealed class TimelineControl : Control
                     .OrderBy(e=>e.name,StringComparer.Ordinal).ThenBy(e=>e.objectId,StringComparer.Ordinal).ToArray());
             _cueInfoByPlayback=evidence.Where(e=>e.kind=="cue-info"&&e.time<=End)
                 .Select(e=>(Playback:e.parentId.Length>0?e.parentId:e.objectId,Event:e))
-                .Where(item=>item.Playback.StartsWith("playback:",StringComparison.Ordinal))
+                .Where(item=>item.Event.parentId.Length>0||item.Playback.StartsWith("playback:",StringComparison.Ordinal))
                 .GroupBy(item=>item.Playback,StringComparer.Ordinal)
                 .ToDictionary(g=>g.Key,g=>g.OrderBy(item=>item.Event.time).ThenBy(item=>item.Event.seq).Last().Event,StringComparer.Ordinal);
             _categoryCatalogs=evidence.Where(e=>e.kind=="category-catalog"&&e.time<=End)
@@ -545,14 +545,23 @@ public sealed class TimelineControl : Control
                 interval.Begin,interval.End,group.End,End,Discontinuities)).ToArray();
             foreach(var range in PlaybackActivityPresentation.Union(ranges))
                 DrawActivity(c,range,y,PlaybackRowHeight,categoryBrush,selected,false);
-            // Requests occupy a separate strip above activity, including requests which never allocate a Voice.
+            // The request stays distinct from Voice allocation, with a leader to its activity lane.
             if(group.Request is {} request&&!PlaybackPresentation.IsUnknownStart(request)&&request.time>=Start&&request.time<=End)
             {
-                var px=X(request.time);var py=y+8;var pen=new Pen(IsSelected(request)?Palette.Text:Palette.Request,IsSelected(request)?1.8:1.2);
+                var px=X(request.time);var py=y+11;var center=y+PlaybackRowHeight/2;
+                var pen=new Pen(IsSelected(request)?Palette.Text:Palette.Request,IsSelected(request)?1.8:1.2);
                 using(c.PushClip(new Rect(LabelWidth,y,PlotWidth,PlaybackRowHeight)))
-                using(c.PushTransform(Matrix.CreateTranslation(px,py)))
-                    c.DrawGeometry(IsSelected(request)?Palette.Request:Palette.Canvas,pen,RequestDiamond);
-                _hits.Add((new Rect(Math.Max(LabelWidth,px-6),y+1,Math.Min(12,LabelWidth+PlotWidth-Math.Max(LabelWidth,px-6)),12),request));
+                {
+                    using(c.PushOpacity(.65))
+                    {
+                        c.DrawLine(new Pen(Palette.Muted,.8),new Point(px,py+3.5),new Point(px,center));
+                        var first=ranges.Where(range=>range.Start>=request.time&&range.Start<=End).MinBy(range=>range.Start);
+                        if(first!=null)c.DrawLine(new Pen(Palette.Muted,.8),new Point(px,center),new Point(X(first.Start),center));
+                    }
+                    using(c.PushTransform(Matrix.CreateTranslation(px,py)))
+                        c.DrawGeometry(IsSelected(request)?Palette.Request:Palette.Canvas,pen,RequestDiamond);
+                }
+                _hits.Add((new Rect(Math.Max(LabelWidth,px-6),y+3,Math.Min(12,LabelWidth+PlotWidth-Math.Max(LabelWidth,px-6)),11),request));
             }
             if(selected&&Selected is {} point&&point.kind!="request"&&point.time>=Start&&point.time<=End)
             {
@@ -642,9 +651,9 @@ public sealed class TimelineControl : Control
             if(voice&&Selected is {} point&&(IsSelected(range.Begin)||range.EndEvent!=null&&IsSelected(range.EndEvent))&&point.time>=Start&&point.time<=End)
                 c.FillRectangle(Palette.Text,new Rect(X(point.time)-1,center-cap,2,cap*2));
         }
-        _hits.Add((new Rect(left,center-(voice?9:8),Math.Max(1,right-left),voice?18:16),range.Begin));
+        _hits.Add((new Rect(left,center-(voice?9:6),Math.Max(1,right-left),voice?18:12),range.Begin));
         if(range.EndEvent!=null&&range.End>=Start&&range.End<=End)
-            _hits.Add((new Rect(Math.Max(LabelWidth,right-5),center-(voice?9:8),Math.Min(10,LabelWidth+PlotWidth-Math.Max(LabelWidth,right-5)),voice?18:16),range.EndEvent));
+            _hits.Add((new Rect(Math.Max(LabelWidth,right-5),center-(voice?9:6),Math.Min(10,LabelWidth+PlotWidth-Math.Max(LabelWidth,right-5)),voice?18:12),range.EndEvent));
 
         void DrawContinuation(double x,bool forward)
         {
