@@ -99,6 +99,9 @@ public sealed partial class Session : IDisposable
     {
         if(IsReplay) return;
         if(e.entity=="capture-segment" || e.kind=="gap") {viewState.Clear();endedVoices.Clear();endedOrder.Clear();return;}
+        if(e.kind=="acb-catalog")
+            foreach(var catalogKey in viewState.Keys.Where(k=>k.StartsWith("cue-catalog|"+e.objectId+"|",StringComparison.Ordinal)).ToArray())
+                viewState.Remove(catalogKey);
         string? key = e.kind switch {
             "play" => "voice|"+e.objectId,
             "request" => "cue|"+e.objectId,
@@ -108,6 +111,9 @@ public sealed partial class Session : IDisposable
             "position" or "remove" => "position|"+e.entity+"|"+e.objectId,
             "metric" => "metric|"+e.objectId+"|"+e.name,
             "bus" => "bus|"+e.objectId,
+            "category-catalog" => "category-catalog",
+            "acb-catalog" => "acb-catalog|"+e.objectId,
+            "cue-catalog" => "cue-catalog|"+e.parentId+"|"+e.objectId,
             _ => null };
         if(e.kind=="selector" && e.detail.Contains("清除全部"))
             foreach(var oldKey in viewState.Keys.Where(k=>k.StartsWith("selector|"+e.objectId+"|",StringComparison.Ordinal)).ToArray()) viewState.Remove(oldKey);

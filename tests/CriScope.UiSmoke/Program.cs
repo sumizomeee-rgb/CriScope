@@ -39,6 +39,7 @@ public sealed class SmokeApp : Application
                 int passed = 0;
                 try
                 {
+                    CueCatalogChecks.Run(Check);
                     var lifecycle = new[] {
                         new WireEvent {kind="request",entity="cue",objectId="pb1",name="Same Cue",time=1},
                         new WireEvent {kind="request",entity="cue",objectId="pb2",name="Same Cue",time=2},
@@ -708,11 +709,15 @@ public sealed class SmokeApp : Application
                     Check(drawer.GetLogicalDescendants().OfType<TextBlock>().Where(x=>!string.IsNullOrWhiteSpace(x.Text)).All(x=>x.ContextMenu!=null),"抽屉正文、属性标签与高级记录的每段文字均可右键复制");
                     Check(!drawer.Children.Any(x=>x.Tag?.ToString() is "inspector-title" or "playback-heading"),"Cue 名称和实例编号在正文不重复出现");
                     Check(drawer.Children.OfType<Grid>().Where(x=>x.Tag?.ToString()?.StartsWith("row:")==true).All(x=>x.Children.OfType<SelectableTextBlock>().Any()),"所有属性值均可选取");
-                    var sheetText=drawer.Children.OfType<StackPanel>().Single(x=>x.Tag?.ToString()=="cue-sheet").Children.OfType<SelectableTextBlock>().Single();
+                    var sheetText=drawer.Children.OfType<Grid>().Single(x=>x.Tag?.ToString()=="row:ACB").Children.OfType<SelectableTextBlock>().Single();
                     Check(sheetText.Text=="MusicSheet" && sheetText.ContextMenu!=null,"CueSheet 名称支持独立复制");
+                    var acbRow=drawer.Children.OfType<Grid>().Single(x=>x.Tag?.ToString()=="row:ACB");
+                    Check(acbRow.Children.OfType<TextBlock>().Any(x=>x.Text=="ACB")&&sheetText.FontSize==13&&sheetText.TextWrapping==Avalonia.Media.TextWrapping.Wrap&&
+                        acbRow.ColumnDefinitions[1].Width.IsStar&&!drawer.GetLogicalDescendants().OfType<Control>().Any(x=>x.Tag?.ToString()=="cue-sheet-icon"),
+                        "ACB 使用明确标签、正常字号和可换行宽度，与状态同列");
                     sheetText.SelectionStart=0;sheetText.SelectionEnd=5;
                     typeof(MainWindow).GetMethod("Inspector",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,null);
-                    var keptSheet=Field<StackPanel>("_details").Children.OfType<StackPanel>().Single(x=>x.Tag?.ToString()=="cue-sheet").Children.OfType<SelectableTextBlock>().Single();
+                    var keptSheet=Field<StackPanel>("_details").Children.OfType<Grid>().Single(x=>x.Tag?.ToString()=="row:ACB").Children.OfType<SelectableTextBlock>().Single();
                     Check(ReferenceEquals(sheetText,keptSheet)&&keptSheet.SelectedText=="Music","实时更新保留 CueSheet 选区");
                     var categoryGrid=drawer.Children.OfType<Grid>().FirstOrDefault(x=>x.Tag?.ToString()=="categories");
                     Check(categoryGrid==null||categoryGrid.Children[0].VerticalAlignment==Avalonia.Layout.VerticalAlignment.Top,"Category 标签与首行对齐");
@@ -954,6 +959,45 @@ public sealed class SmokeApp : Application
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/tracks-runtime-fixed.png"),window.CapturePng("window"));
                     window.ApplyUiAction("theme","light");await Task.Delay(180);
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/tracks-runtime-fixed-light.png"),window.CapturePng("window"));
+
+                    var catalogUi=CueCatalogChecks.UiFixture(false);
+                    sessions[catalogUi.Native.Id]=catalogUi.Native;sessions[catalogUi.Sdk.Id]=catalogUi.Sdk;
+                    Connected(catalogUi.Native,true);Connected(catalogUi.Sdk,true);
+                    Select(catalogUi.Native);window.ApplyUiAction("workspace","Timeline");window.ApplyUiAction("range","0:5.5");
+                    window.ApplyUiAction("select","50");window.Width=1400;window.Height=850;
+                    if(!Field<bool>("_showInspector"))Click(Field<Button>("_detailsToggle"));
+                    window.ApplyUiAction("theme","dark");await Task.Delay(220);
+                    var awaitingCatalog=Field<StackPanel>("_details").Children.OfType<Grid>().Single(x=>x.Tag?.ToString()=="row:Category");
+                    Check(awaitingCatalog.Children.OfType<SelectableTextBlock>().Single().Text=="未获取","目录到达前保留未知分类，不按 Cue 名猜测");
+                    var beforeCatalogEnd=Field<TimelineControl>("_timeline").End;
+                    CueCatalogChecks.SupplyCatalog(catalogUi.Sdk);
+                    typeof(MainWindow).GetMethod("Refresh",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,null);
+                    await Task.Delay(60);
+                    Check(Field<TimelineControl>("_timeline").End==beforeCatalogEnd,"静态目录到达不推动原生时间尺或观测历时");
+                    Check(Field<StackPanel>("_details").Children.OfType<Grid>().Single(x=>x.Tag?.ToString()=="row:Cue 分类").Children.OfType<SelectableTextBlock>().Single().Text=="Volume_Music",
+                        "冻结在目录采集之前的播放时刻，仍能补查已收到的固定配置，时间位置保持原处");
+                    window.ApplyUiAction("range","0:30");await Task.Delay(60);
+                    var catalogDrawer=Field<StackPanel>("_details");
+                    var catalogAcb=catalogDrawer.Children.OfType<Grid>().Single(x=>x.Tag?.ToString()=="row:ACB");
+                    var catalogStatus=catalogDrawer.Children.OfType<Grid>().Single(x=>x.Tag?.ToString()=="row:状态");
+                    var catalogName=catalogAcb.Children.OfType<SelectableTextBlock>().Single();
+                    Check(catalogName.Bounds.Height>28&&catalogName.Bounds.Width<=catalogAcb.Bounds.Width-88&&
+                        Math.Abs(catalogName.TranslatePoint(new Point(),window)!.Value.X-catalogStatus.Children.OfType<SelectableTextBlock>().Single().TranslatePoint(new Point(),window)!.Value.X)<1,
+                        "长 ACB 在属性值列自动换行，无截断、超框或靠左漂移");
+                    Check(catalogDrawer.Children.OfType<Grid>().Single(x=>x.Tag?.ToString()=="row:Cue 分类").Children.OfType<SelectableTextBlock>().Single().Text=="Volume_Music"&&
+                        catalogDrawer.Children.OfType<Grid>().Single(x=>x.Tag?.ToString()=="row:Cue 时长").Children.OfType<SelectableTextBlock>().Single().Text=="184.615 秒",
+                        "时间位置未变、无需重新选择时，抽屉更新异步到达的配置分类及标注时长");
+                    var catalogTimeline=Field<TimelineControl>("_timeline");var catalogSnapshot=Field<WireEvent[]>("_snapshot");
+                    var catalogPlayback=PlaybackPresentation.Group(catalogSnapshot,30).Single();
+                    var catalogRuntime=typeof(TimelineControl).GetMethod("CategoriesFor",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(catalogTimeline,[catalogPlayback,catalogPlayback.Request!]);
+                    Check(catalogRuntime is WireEvent[] {Length:0}&&runtimeResolve.Invoke(catalogTimeline,[catalogPlayback,Array.Empty<WireEvent>()]) is PrimaryGroupCategory {Ordinal:0},
+                        "无运行时分类、无关联 Source 元数据时，热接入轨道使用目录配置颜色");
+                    Check(runtimeResolve.Invoke(catalogTimeline,[catalogPlayback,new[]{new WireEvent {kind="category",name="Volume_SFX",objectId="1:category-index:1",time=5.01}}]) is PrimaryGroupCategory {Ordinal:1},
+                        "晚到的首组目录可识别热接入运行时覆盖分类，覆盖静态 Music 配置");
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/acb-catalog-dark.png"),window.CapturePng("window"));
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/acb-catalog-inspector.png"),window.CapturePng("inspector"));
+                    window.ApplyUiAction("theme","light");await Task.Delay(180);
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/acb-catalog-light.png"),window.CapturePng("window"));
 
                     Console.WriteLine($"结果：{passed}/{passed} UI 检查通过"); desktop.Shutdown(0);
                 }

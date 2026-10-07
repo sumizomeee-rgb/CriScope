@@ -23,7 +23,15 @@ namespace CriScope.Unity
         private float nextSample, nextMemorySample, nextCategoryCatalogSample, lastCategoryCatalogEmit;
         [Serializable] private sealed class CategoryEntry { public string name; public int index, groupNo, ordinal; }
         [Serializable] private sealed class CategoryCatalog { public CategoryEntry[] firstGroupCategories; public int firstGroupNo; public string basis = "acf-category-catalog"; }
-        [Serializable] private sealed class CueMetadata { public string[] categories; public CategoryEntry[] categoryDetails; public int firstGroupNo; public string basis = "cue-config"; }
+        [Serializable] private sealed class CueMetadata { public string name; public int id; public long length; public string[] categories; public CategoryEntry[] categoryDetails; public int firstGroupNo; public string basis = "cue-config"; }
+        [Serializable] private sealed class AcbMetadata { public string acbHandle, generation, cueSheet; public bool connectionSnapshot; public double observedFrom; }
+        [Serializable] private sealed class CueDirectoryPart { public string acbHandle, generation; public CueMetadata[] cues; public string basis = "acb-cue-catalog"; }
+        private sealed class CueDirectory { public CriAtomExAcb acb; public string handle, generation, alias; public int index, part; public bool complete; }
+        private string sdkCapture;
+        private double nextCueDirectoryScan, lastCueDirectoryScan;
+        private bool initialCueDirectoryScan;
+        private int cueDirectoryCursor;
+        private readonly Dictionary<string, CueDirectory> cueDirectories = new Dictionary<string, CueDirectory>();
         private int firstCategoryGroupNo = -1;
         private string categoryCatalogSignature;
         private readonly Dictionary<ushort, int> firstGroupOrdinals = new Dictionary<ushort, int>();
@@ -84,10 +92,18 @@ namespace CriScope.Unity
         }
         private void Update()
         {
-            if (bridge == null || Time.realtimeSinceStartup < nextSample) return;
-            nextSample = Time.realtimeSinceStartup + 0.5f;
-            try { Sample(); }
-            catch (Exception e) { bridge.Emit(new WireEvent { kind = "warning", name = "SDK sample unavailable", detail = e.Message }); }
+            if (bridge == null) return;
+            try
+            {
+                RefreshCapture();
+                if (Time.realtimeSinceStartup >= nextSample)
+                {
+                    nextSample = Time.realtimeSinceStartup + 0.5f;
+                    Sample();
+                }
+                if (bridge != null && sdkCapture != null) SampleCueDirectory();
+            }
+            catch (Exception e) { if (bridge != null) bridge.Emit(new WireEvent { kind = "warning", name = "SDK sample unavailable", detail = e.Message }); }
         }
         private void Sample()
         {
@@ -115,20 +131,9 @@ namespace CriScope.Unity
                 CriAtomEx.CueInfo cue;
                 if (acb != null && !string.IsNullOrEmpty(source.cueName) && acb.GetCueInfo(source.cueName, out cue))
                 {
-                    cueMetadata[playbackId] = Time.realtimeSinceStartup;
-                    var categoryNames = new List<string>();
-                    var categoryDetails = new List<CategoryEntry>();
-                    if (cue.categories != null) foreach (ushort index in cue.categories)
-                    {
-                        CriAtomExAcf.CategoryInfo category;
-                        if (index == ushort.MaxValue || !CriAtomExAcf.GetCategoryInfoByIndex(index, out category) || string.IsNullOrEmpty(category.name) || categoryNames.Contains(category.name)) continue;
-                        categoryNames.Add(category.name);
-                        int ordinal;
-                        if (category.groupNo <= int.MaxValue)
-                            categoryDetails.Add(new CategoryEntry { name = category.name, index = index, groupNo = (int)category.groupNo, ordinal = firstGroupOrdinals.TryGetValue(index, out ordinal) ? ordinal : -1 });
-                    }
-                    bridge.Emit(new WireEvent { kind = "cue-info", objectId = "playback:" + playbackId, name = source.cueName, value = cue.length, raw = JsonUtility.ToJson(new CueMetadata { categories = categoryNames.ToArray(), categoryDetails = categoryDetails.ToArray(), firstGroupNo = firstCategoryGroupNo }),
-                        detail = "SDK Cue 标注时长（毫秒）；组件最新播放的可选信息，不等于 Voice 实际历时" });
+                    if (sdkCapture != null && bridge.TryEmit(new WireEvent { kind = "cue-info", objectId = "playback:" + playbackId, name = source.cueName, value = cue.length, raw = JsonUtility.ToJson(ReadCueMetadata(cue)),
+                        detail = "SDK Cue 标注时长（毫秒）；组件最新播放的可选信息，不等于 Voice 实际历时" }, sdkCapture))
+                        cueMetadata[playbackId] = Time.realtimeSinceStartup;
                 }
             }
             ended.Clear();
@@ -148,6 +153,102 @@ namespace CriScope.Unity
                 }
             }
             foreach (var id in ended) { tracked.Remove(id); cueMetadata.Remove(id); }
+        }
+        private void RefreshCapture()
+        {
+            string connectedCapture = bridge.CaptureId;
+            if (connectedCapture == sdkCapture) return;
+            sdkCapture = connectedCapture;
+            cueDirectories.Clear();
+            cueMetadata.Clear();
+            nextSample = nextCategoryCatalogSample = 0;
+            categoryCatalogSignature = null;
+            nextCueDirectoryScan = lastCueDirectoryScan = 0;
+            initialCueDirectoryScan = true;
+            cueDirectoryCursor = 0;
+        }
+        private CueMetadata ReadCueMetadata(CriAtomEx.CueInfo cue)
+        {
+            var names = new List<string>();
+            var details = new List<CategoryEntry>();
+            if (cue.categories != null) foreach (ushort index in cue.categories)
+            {
+                CriAtomExAcf.CategoryInfo category;
+                if (index == ushort.MaxValue || !CriAtomExAcf.GetCategoryInfoByIndex(index, out category) || string.IsNullOrEmpty(category.name) || names.Contains(category.name)) continue;
+                names.Add(category.name);
+                int ordinal;
+                if (category.groupNo <= int.MaxValue)
+                    details.Add(new CategoryEntry { name = category.name, index = index, groupNo = (int)category.groupNo, ordinal = firstGroupOrdinals.TryGetValue(index, out ordinal) ? ordinal : -1 });
+            }
+            return new CueMetadata { name = cue.name, id = cue.id, length = cue.length, categories = names.ToArray(), categoryDetails = details.ToArray(), firstGroupNo = firstCategoryGroupNo };
+        }
+        private bool EmitAcbDirectory(CueDirectory directory, string lifecycle, double from, bool initial)
+        {
+            return bridge.TryEmit(new WireEvent { kind = "acb-catalog", entity = "acb", objectId = "acb:" + directory.handle, name = directory.alias, lifecycle = lifecycle,
+                raw = JsonUtility.ToJson(new AcbMetadata { acbHandle = directory.handle, generation = directory.generation, cueSheet = directory.alias, observedFrom = from, connectionSnapshot = initial }),
+                detail = "SDK 已加载 CueSheet 目录；别名不是原生 ACB 名称" }, sdkCapture);
+        }
+        private void SampleCueDirectory()
+        {
+            // Unity main thread only. Never enumerate players or call game managers.
+            if (categoryCatalogSignature == null) return;
+            double now = bridge.ClockSeconds;
+            if (now >= nextCueDirectoryScan)
+            {
+                var loaded = new Dictionary<string, CueDirectory>();
+                foreach (var atom in FindObjectsOfType<CriAtom>())
+                {
+                    if (atom.cueSheets == null) continue;
+                    foreach (var sheet in atom.cueSheets)
+                    {
+                        if (sheet == null || sheet.acb == null || !sheet.acb.isAvailable) continue;
+                        ulong nativeHandle = IntPtr.Size == 4 ? unchecked((uint)sheet.acb.nativeHandle.ToInt32()) : unchecked((ulong)sheet.acb.nativeHandle.ToInt64());
+                        string handle = "0x" + nativeHandle.ToString("x", CultureInfo.InvariantCulture);
+                        if (!loaded.ContainsKey(handle)) loaded.Add(handle, new CueDirectory { acb = sheet.acb, handle = handle, generation = Guid.NewGuid().ToString("N"), alias = sheet.name });
+                    }
+                }
+                foreach (var old in new List<CueDirectory>(cueDirectories.Values))
+                {
+                    CueDirectory observed;
+                    if (loaded.TryGetValue(old.handle, out observed) && ReferenceEquals(observed.acb, old.acb)) continue;
+                    if (!EmitAcbDirectory(old, "released", lastCueDirectoryScan, false)) return;
+                    cueDirectories.Remove(old.handle);
+                }
+                foreach (var observed in loaded.Values)
+                {
+                    if (cueDirectories.ContainsKey(observed.handle)) continue;
+                    if (!EmitAcbDirectory(observed, "loaded", lastCueDirectoryScan, initialCueDirectoryScan)) return;
+                    cueDirectories.Add(observed.handle, observed);
+                }
+                initialCueDirectoryScan = false;
+                lastCueDirectoryScan = now;
+                nextCueDirectoryScan = now + 1;
+            }
+            var pending = new List<CueDirectory>();
+            foreach (var directory in cueDirectories.Values) if (!directory.complete && directory.acb.isAvailable) pending.Add(directory);
+            if (pending.Count == 0) return;
+            var next = pending[cueDirectoryCursor % pending.Count];
+            cueDirectoryCursor = (cueDirectoryCursor + 1) % pending.Count;
+            var batch = new List<CueMetadata>();
+            var budget = System.Diagnostics.Stopwatch.StartNew();
+            int index = next.index;
+            bool complete = false;
+            // At most 16 SDK reads and 2 ms per frame, including category lookups.
+            // No complete CueInfoList allocation for a large bank.
+            for (int read = 0; read < 16 && (read == 0 || budget.Elapsed.TotalMilliseconds < 2); read++)
+            {
+                CriAtomEx.CueInfo cue;
+                if (!next.acb.GetCueInfoByIndex(index, out cue)) { complete = true; break; }
+                index++;
+                if (!string.IsNullOrEmpty(cue.name)) batch.Add(ReadCueMetadata(cue));
+            }
+            if (batch.Count > 0 && !bridge.TryEmit(new WireEvent { kind = "cue-catalog", entity = "acb", parentId = "acb:" + next.handle,
+                objectId = "acb:" + next.handle + ":part:" + next.part, name = next.alias,
+                raw = JsonUtility.ToJson(new CueDirectoryPart { acbHandle = next.handle, generation = next.generation, cues = batch.ToArray() }),
+                detail = "SDK Cue 配置目录；按 ACB 句柄和 Cue 名称匹配，不推断播放起止" }, sdkCapture)) return;
+            if (batch.Count > 0) next.part++;
+            next.index = index;
+            next.complete = complete;
         }
         private void SampleCategoryCatalog()
         {
@@ -177,10 +278,16 @@ namespace CriScope.Unity
             }
             string signature = firstCategoryGroupNo + ":" + string.Join("|", members.ConvertAll(e => e.index + "/" + e.name).ToArray());
             if (signature == categoryCatalogSignature && now - lastCategoryCatalogEmit < 60f) return;
+            if (sdkCapture == null || !bridge.TryEmit(new WireEvent { kind = "category-catalog", name = "ACF Category Group", raw = JsonUtility.ToJson(new CategoryCatalog { firstGroupNo = firstCategoryGroupNo, firstGroupCategories = members.ToArray() }),
+                detail = "SDK ACF Category 顺序；仅用于实例颜色归属" }, sdkCapture)) return;
+            if (categoryCatalogSignature != null && categoryCatalogSignature != signature)
+            {
+                // ACF labels/order changed: refresh authored metadata without a bank reload.
+                foreach (var directory in cueDirectories.Values) { directory.index = directory.part = 0; directory.complete = false; }
+                cueMetadata.Clear();
+            }
             categoryCatalogSignature = signature;
             lastCategoryCatalogEmit = now;
-            bridge.Emit(new WireEvent { kind = "category-catalog", name = "ACF Category Group", raw = JsonUtility.ToJson(new CategoryCatalog { firstGroupNo = firstCategoryGroupNo, firstGroupCategories = members.ToArray() }),
-                detail = "SDK ACF Category 顺序；仅用于实例颜色归属" });
         }
         private void Metric(string name, double value, string detail) { bridge.Emit(new WireEvent { kind = "metric", name = name, value = value, detail = detail }); }
         private void Beat(ref CriAtomExBeatSync.Info info)

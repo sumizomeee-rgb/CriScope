@@ -12,6 +12,7 @@ namespace CriScope.Unity
     [Serializable] public sealed class WireEvent
     {
         public string kind, session, name, objectId, detail, platform, raw;
+        public string parentId, entity, lifecycle;
         public string source = "cri-sdk";
         public long seq;
         public double time, value, x, y, z;
@@ -42,6 +43,8 @@ namespace CriScope.Unity
         private int queuedBytes;
         private const int MaxBytes = 8 * 1024 * 1024, MaxFrames = 8192;
         public string Status { get { return status; } }
+        internal string CaptureId { get { lock (gate) return disposed || captureFault != null ? null : capture; } }
+        internal double ClockSeconds { get { return clock.Elapsed.TotalSeconds; } }
         public bool WorkerAlive { get { return worker.IsAlive; } }
         public string LastError { get; private set; }
         public CriScopeBridge(string host, string clientName, string platform, int pid, string nativeSetupReason = null)
@@ -59,15 +62,18 @@ namespace CriScope.Unity
             helloTemplate = JsonUtility.ToJson(new Hello { pid = pid, clientId = identity, captureId = "CAPTURE_PLACEHOLDER", name = clientName, machine = Environment.MachineName, platform = platform });
             worker = new Thread(Run) { IsBackground = true, Name = "CriScope relay sender" }; worker.Start();
         }
-        public void Emit(WireEvent item)
+        public void Emit(WireEvent item) { TryEmit(item); }
+        internal bool TryEmit(WireEvent item, string expectedCapture = null)
         {
-            if (disposed) return;
+            if (disposed) return false;
             lock (gate)
             {
-                if (capture == null || captureFault != null) { offlineSdk++; return; }
+                if (disposed || capture == null || captureFault != null)
+                { if (expectedCapture == null) offlineSdk++; return false; }
+                if (expectedCapture != null && capture != expectedCapture) return false;
                 item.session = capture; item.seq = ++sdkSequence; item.time = clock.Elapsed.TotalSeconds;
                 if (item.detail != null && item.detail.Length > 2048) item.detail = item.detail.Substring(0, 2048);
-                EnqueueLocked(2, Encoding.UTF8.GetBytes(JsonUtility.ToJson(item)));
+                return EnqueueLocked(2, Encoding.UTF8.GetBytes(JsonUtility.ToJson(item)));
             }
         }
         private bool Enqueue(byte channel, byte[] data)

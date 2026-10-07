@@ -702,8 +702,11 @@ public sealed partial class MainWindow : Window
             if (_lastTotal != s.Total || _lastSupplementTotal != supplementTotal)
             {
                 _lastTotal=s.Total; _lastSupplementTotal=supplementTotal;
+                var previousCatalogSequence=_snapshot.Where(CueCatalogIndex.IsMetadata).Select(e=>Math.Abs(e.seq)).DefaultIfEmpty().Max();
                 var nativeEvents=s.ViewSnapshot();
                 _snapshot=ClientTimelineProjection.Combine(nativeEvents,supplements.SelectMany(other=>other.ViewSnapshot()).ToArray());
+                if(previousCatalogSequence!=_snapshot.Where(CueCatalogIndex.IsMetadata).Select(e=>Math.Abs(e.seq)).DefaultIfEmpty().Max())
+                    _lastInspectorEnd=double.NaN;
                 _timeline.TimeOrigin=s.TimeOrigin;
                 _timeline.SourceConnected=s.Connected || s.IsReplay;
                 _supplementMetrics=supplements.SelectMany(other=>other.ViewSnapshot().Where(e=>e.kind=="metric"))
@@ -719,7 +722,7 @@ public sealed partial class MainWindow : Window
             _timeline.ControlLabels = labels;
             // Catalog snapshots are metadata; their periodic SDK timestamp must not
             // advance the native playback ruler or an apparent playback duration.
-            var visibleEnd = _snapshot.Where(e => e.kind != "category-catalog")
+            var visibleEnd = _snapshot.Where(e => !CueCatalogIndex.IsMetadata(e))
                 .Select(e => e.time).DefaultIfEmpty(_timeline.End).Max();
             if (_timeline.Live && _snapshot.Length > 0) _timeline.End = visibleEnd;
             if (_showInspector && _selected!=null && (double.IsNaN(_lastInspectorEnd) || Math.Abs(_timeline.End-_lastInspectorEnd)>.5)) { _lastInspectorEnd=_timeline.End; Inspector(); }
@@ -728,7 +731,7 @@ public sealed partial class MainWindow : Window
                 _timeline.End += .3;
                 if (_timeline.End >= visibleEnd) _playing = false;
             }
-            _status.Text = _error ?? s.Error ?? $"事件 {s.Total:N0}   ·   丢失 {s.Dropped:N0}   ·   缓存 {_snapshot.Count(e=>e.kind!="category-catalog"):N0}";
+            _status.Text = _error ?? s.Error ?? $"事件 {s.Total:N0}   ·   丢失 {s.Dropped:N0}   ·   缓存 {_snapshot.Count(e=>!CueCatalogIndex.IsMetadata(e)):N0}";
             _status.Foreground = _error != null || s.Error != null ? _p.Error : _p.Muted;
             ToolTip.SetTip(_status,s.ConnectionStatus+" · 内存缓存仅保留最近窗口；完整日志见底部文件夹入口");
         }
@@ -883,10 +886,10 @@ public sealed partial class MainWindow : Window
         if(playback!=null)
         {
             var sheet=CueMetadataPresentation.AcbName(playback.Request);
-            Field("CueSheet / ACB",sheet.Length>0?sheet:"未获取");
+            Field("ACB",sheet.Length>0?sheet:"未获取");
             ToolTip.SetTip(details.Children.Last(),"原生 Monitor 提供的 ACB 名称；可能与引擎注册的 CueSheet 别名不同。");
             var categories=AssociationPresentation.Categories(_snapshot,playback.Id,inspectedAt);
-            var configuredCue=_snapshot.LastOrDefault(x=>x.kind=="cue-info"&&x.name==playback.Name&&(x.parentId==playback.Id||x.objectId==playback.Id));
+            var configuredCue=CueConfigurationFor(playback);
             if(categories.Length==0){
                 var names=AssociationPresentation.CueCategories(configuredCue);
                 Field(names.Length>0?"Cue 分类":"Category",names.Length>0?string.Join(" · ",names):"未获取");
@@ -908,7 +911,7 @@ public sealed partial class MainWindow : Window
             var elapsed=playback.UnknownStart&&!playback.HasEvidenceGap&&AssociationPresentation.Anchor(playback) is {} first?Math.Max(0,Math.Min(inspectedAt,playback.InstanceEndedAt??inspectedAt)-first.time):playback.DurationAt(inspectedAt);
             Field(elapsedLabel,elapsed is {} duration?$"{duration:0.000} 秒":playback.Voices.Length==0&&playback.End==null?"尚未开始":"未完整记录");
             ToolTip.SetTip(details.Children.Last(),"按原始事件时钟计算，截止当前观测位置，可能包含暂停或间隔；起点未知时仅计本次观测时长。");
-            var cueInfo=_snapshot.LastOrDefault(x=>x.kind=="cue-info"&&x.name==playback.Name&&(x.parentId==playback.Id||x.objectId==playback.Id));
+            var cueInfo=configuredCue;
             Field("Cue 时长",cueInfo==null?"未获取":cueInfo.value<0?"无限／不定长":$"{cueInfo.value/1000:0.000} 秒");
             ToolTip.SetTip(details.Children.Last(),"Cue 配置标注的时长，不是当前播放实例的预计结束时间。");
             if(playback.End!=null)Field("结束原因",playback.EndReasonLabel);

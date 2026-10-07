@@ -148,6 +148,7 @@ public sealed class TimelineControl : Control
     private Dictionary<(string Session,string Channel,string Playback),WireEvent[]> _categoriesByPlayback=[];
     private Dictionary<string,WireEvent> _cueInfoByPlayback=[];
     private WireEvent[] _categoryCatalogs=[];
+    private CueCatalogIndex _cueCatalogIndex=new([],0);
     private int _controlMask;
     private PlaybackGroup[] _playbackGroups=[];
     private ControlGroup[] _controlRows=[];
@@ -178,17 +179,21 @@ public sealed class TimelineControl : Control
                 .Where(item=>item.Event.parentId.Length>0||item.Playback.StartsWith("playback:",StringComparison.Ordinal))
                 .GroupBy(item=>item.Playback,StringComparer.Ordinal)
                 .ToDictionary(g=>g.Key,g=>g.OrderBy(item=>item.Event.time).ThenBy(item=>item.Event.seq).Last().Event,StringComparer.Ordinal);
-            _categoryCatalogs=evidence.Where(e=>e.kind=="category-catalog"&&e.time<=End)
+            _categoryCatalogs=evidence.Where(e=>e.kind=="category-catalog")
                 .OrderBy(e=>e.time).ThenBy(e=>e.seq).ToArray();
+            _cueCatalogIndex=new CueCatalogIndex(evidence,double.PositiveInfinity);
         }
         return _categoriesByPlayback.GetValueOrDefault((anchor.session,anchor.channel,group.Id))??[];
     }
     private PrimaryGroupCategory? PrimaryCategoryFor(PlaybackGroup group,WireEvent[] categories)
     {
         var observedAt=categories.Length>0?categories.Max(e=>e.time):AssociationPresentation.Anchor(group)?.time??End;
-        var catalog=_categoryCatalogs.LastOrDefault(e=>e.time<=observedAt+.1);
+        // The initial SDK catalog can arrive after a hot-join Category observation.
+        // It identifies the ACF group; it does not move the runtime event's time.
+        var catalog=_categoryCatalogs.LastOrDefault(e=>e.time<=observedAt+.1)??_categoryCatalogs.FirstOrDefault();
         _cueInfoByPlayback.TryGetValue(group.Id,out var cueInfo);
         if(cueInfo?.name!=group.Name)cueInfo=null;
+        cueInfo??=_cueCatalogIndex.Resolve(group);
         return PlaybackCategoryPresentation.Resolve(catalog,cueInfo,categories);
     }
     private ControlGroup[] ControlRows()

@@ -47,10 +47,11 @@ public sealed class WireEvent
     public string platform { get; set; } = "";
     internal WireEvent CloneForRecording(long ordinal)
     {
-        var copy = (WireEvent)MemberwiseClone();
+        var copy = Clone();
         copy.recordOrdinal = ordinal;
         return copy;
     }
+    public WireEvent Clone() => (WireEvent)MemberwiseClone();
     public string ToJson() => JsonSerializer.Serialize(this);
     public static WireEvent Parse(string json) => JsonSerializer.Deserialize<WireEvent>(json) ?? throw new InvalidDataException("空事件");
 }

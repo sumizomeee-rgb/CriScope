@@ -164,7 +164,7 @@ public sealed partial class MainWindow
     private void ArrangePlaybackFacts(StackPanel content)
     {
         Grid? Take(string tag) {var row=content.Children.OfType<Grid>().FirstOrDefault(x=>x.Tag?.ToString()==tag);if(row!=null)content.Children.Remove(row);return row;}
-        var sheet=Take("row:CueSheet / ACB");
+        var sheet=Take("row:ACB");
         var status=Take("row:状态");
         var start=Take("row:开始播放");
         var elapsed=Take("row:已播放")??Take("row:播放历时")??Take("row:本次观测");
@@ -178,12 +178,12 @@ public sealed partial class MainWindow
         var insertAt=0;
         if(sheet!=null)
         {
-            var value=sheet.Children.OfType<SelectableTextBlock>().FirstOrDefault()?.Text??"未获取";
-            var subtitle=new StackPanel {Tag="cue-sheet",Orientation=Orientation.Horizontal,Spacing=6,Margin=new Thickness(0,2,0,8)};
-            var icon=VisualLanguage.Glyph(IconKind.CueSheet,_p.Muted,14);icon.Tag="cue-sheet-icon";subtitle.Children.Add(icon);
-            var text=new SelectableTextBlock {Tag="cue-sheet-name",Text=value,FontSize=11,Foreground=_p.Muted};AddCopyMenu(text,"复制 CueSheet / ACB 名称");text.TextTrimming=TextTrimming.CharacterEllipsis;text.MaxWidth=250;
-            ToolTip.SetTip(subtitle,value+"\n"+ToolTip.GetTip(sheet));subtitle.Children.Add(text);
-            content.Children.Insert(insertAt++,subtitle);
+            var text=sheet.Children.OfType<SelectableTextBlock>().Single();
+            text.Tag="cue-sheet-name";
+            text.TextWrapping=TextWrapping.Wrap;
+            text.TextTrimming=TextTrimming.None;
+            ToolTip.SetTip(text,text.Text);
+            content.Children.Insert(insertAt++,sheet);
         }
         void Insert(Grid? row)
         {
