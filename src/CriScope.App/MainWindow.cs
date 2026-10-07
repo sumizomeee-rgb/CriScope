@@ -662,23 +662,13 @@ public sealed partial class MainWindow : Window
                 var address=ClientCardPresentation.Address(preferred);
                 if(address!="IP 未提供")lines.Children.Add(Label(address, 11, _p.Text));
                 if (duplicateName && !preferred.IsReplay) lines.Children.Add(Label($"进程 {preferred.Pid}", 10, _p.Muted));
-                var channels = new WrapPanel { Orientation = Orientation.Horizontal };
-                foreach (var channel in group.GroupBy(ClientCardPresentation.Channel))
-                {
-                    var current=channel.OrderByDescending(s=>s.Connected).ThenByDescending(s=>_sessionOrder[s]).First();
-                    if(!current.Connected)continue;
-                    var name=channel.Key=="native"?"原生":"SDK";
-                    var label=Label($"{name} {(current.Connected?"✓":"—")}",10,current.Connected?_p.Good:_p.Muted);
-                    label.Margin=new Thickness(0,0,12,0); ToolTip.SetTip(label,current.ConnectionStatus); channels.Children.Add(label);
-                }
-                if(channels.Children.Count>0)lines.Children.Add(channels);
                 var heading = Action("",()=>SelectSession(preferred)); heading.Content=lines;
                 heading.HorizontalAlignment=HorizontalAlignment.Stretch;heading.HorizontalContentAlignment=HorizontalAlignment.Left;
                 heading.Padding=new Thickness(10,12);heading.BorderBrush=selected?_p.Muted:Brushes.Transparent;
                 heading.BorderThickness=selected?new Thickness(3,0,0,0):new Thickness(0);heading.Background=selected?_p.Alternate:Brushes.Transparent;
                 heading.Tag=selected?"selected-client":"client";
                 heading.PointerExited+=(_,_)=>heading.Background=selected?_p.Alternate:Brushes.Transparent;
-                ToolTip.SetTip(heading, $"{preferred.Name}\n{preferred.Machine} · {preferred.Platform}\nPID {preferred.Pid}\n同一客户端的原生与 SDK 数据合并浏览");
+                ToolTip.SetTip(heading, $"{preferred.Name}\n{preferred.Machine} · {preferred.Platform}\nPID {preferred.Pid}");
                 card.Children.Add(heading);
                 _sessions.Children.Add(card);
             }
