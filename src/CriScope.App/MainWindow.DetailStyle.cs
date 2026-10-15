@@ -19,7 +19,8 @@ public sealed partial class MainWindow
         var button=Action(tip,action);
         button.Content=VisualLanguage.Glyph(icon,_p.Text,18);
         button.Width=UiMetrics.IconTarget;button.Height=UiMetrics.IconTarget;button.Padding=new Thickness(0);
-        button.HorizontalContentAlignment=HorizontalAlignment.Center;button.VerticalContentAlignment=VerticalAlignment.Center;return button;
+        button.HorizontalContentAlignment=HorizontalAlignment.Center;button.VerticalContentAlignment=VerticalAlignment.Center;
+        Avalonia.Automation.AutomationProperties.SetName(button,tip);return button;
     }
     private string WallTime(double time,Session? session)
     {
@@ -32,7 +33,7 @@ public sealed partial class MainWindow
     {
         foreach(var fold in content.GetLogicalDescendants().OfType<Expander>())
         {
-            fold.HorizontalAlignment=HorizontalAlignment.Stretch;fold.MinHeight=0;fold.Padding=new Thickness(0);fold.Margin=new Thickness(0);
+            fold.HorizontalAlignment=HorizontalAlignment.Stretch;fold.MinHeight=0;fold.Padding=new Thickness(0);
             fold.Template=new FuncControlTemplate<Expander>((owner,scope)=>{
                 var panel=new StackPanel {Spacing=UiMetrics.Space1};
                 var heading=new Grid {ColumnDefinitions=new ColumnDefinitions("*,18")};

@@ -90,9 +90,9 @@ public sealed partial class MainWindow
         foreach(var button in links.Children.OfType<Button>().ToArray())
         {
             var full=ToolTip.GetTip(button)?.ToString() ?? "定位";
-            var caption=button is NavigationButton nav?nav.Caption switch {"定位空间音源"=>"空间音源","定位开始播放"=>"开始播放","定位事件时间"=>"事件时间",_=>nav.Caption}:full;
+            var caption=button is NavigationButton nav?nav.Caption switch {"定位空间音源"=>"查看音源","定位开始播放"=>"定位开始","定位事件时间"=>"定位时间",_=>nav.Caption}:full;
             button.Content=NavigationContent(caption);
-            button.Height=28;button.Padding=new Thickness(4,0);
+            button.Height=32;button.Padding=new Thickness(8,0);
             button.HorizontalAlignment=HorizontalAlignment.Left;
             button.VerticalContentAlignment=VerticalAlignment.Center;
             if(button is NavigationButton {RelatedName.Length:>0} related) {
@@ -113,9 +113,9 @@ public sealed partial class MainWindow
         }
         if(actions.Children.Count>0)links.Children.Insert(0,actions);
         ArrangePlaybackFacts(content);
-        if(links.Children.Count>0){links.Children.Insert(0,InspectorSection("关联与定位","section:associations"));content.Children.Add(links);}
+        if(links.Children.Count>0){links.Children.Insert(0,InspectorSection("继续追查","section:associations"));content.Children.Add(links);}
         if(more.Children.Count>0)content.Children.Add(new Expander {
-            Tag="more-information",Header="更多信息",Content=more,FontSize=12,
+            Tag="more-information",Header="技术详情",Content=more,FontSize=12,Margin=new Thickness(0,14,0,0),
             HorizontalAlignment=HorizontalAlignment.Stretch });
         NormalizeInspectorRows(content);
         EnableInspectorCopy(content);
@@ -157,8 +157,8 @@ public sealed partial class MainWindow
     private Border InspectorSection(string title,string tag)
     {
         var caption=Label(title,UiMetrics.CaptionSize,_p.Muted);caption.FontWeight=FontWeight.SemiBold;
-        return new Border {Tag=tag,BorderBrush=_p.Border,BorderThickness=new Thickness(0,1,0,0),
-            Margin=new Thickness(0,UiMetrics.Space3,0,UiMetrics.Space1),Padding=new Thickness(0,UiMetrics.Space2,0,0),Child=caption};
+        return new Border {Tag=tag,
+            Margin=new Thickness(0,22,0,8),Child=caption};
     }
 
     private void ArrangePlaybackFacts(StackPanel content)
@@ -176,31 +176,52 @@ public sealed partial class MainWindow
         var occurred=Take("row:发生时间");
         if(sheet==null && status==null && start==null && elapsed==null && category==null && duration==null && occurred==null)return;
         var insertAt=0;
-        if(sheet!=null)
-        {
-            var text=sheet.Children.OfType<SelectableTextBlock>().Single();
-            text.Tag="cue-sheet-name";
-            text.TextWrapping=TextWrapping.Wrap;
-            text.TextTrimming=TextTrimming.None;
-            ToolTip.SetTip(text,text.Text);
-            content.Children.Insert(insertAt++,sheet);
-        }
         void Insert(Grid? row)
         {
-            if(row==null)return;
-            content.Children.Insert(insertAt++,row);
+            if(row!=null)content.Children.Insert(insertAt++,row);
         }
-        Insert(occurred);Insert(status);
-        if(start!=null||end!=null||elapsed!=null)
+        Insert(occurred);
+        if(status!=null)
         {
-            content.Children.Insert(insertAt++,InspectorSection("播放时间","section:playback-time"));
+            status.MinHeight=34;
+            foreach(var value in status.Children.OfType<SelectableTextBlock>())
+            { value.FontSize=15; value.FontWeight=FontWeight.SemiBold; }
+            Insert(status);
+        }
+        if(elapsed!=null)
+        {
+            elapsed.MinHeight=48;
+            foreach(var label in elapsed.Children.OfType<TextBlock>()) label.VerticalAlignment=VerticalAlignment.Center;
+            foreach(var value in elapsed.Children.OfType<SelectableTextBlock>())
+            {
+                var measured=value.Text?.Any(char.IsDigit)==true;
+                value.FontSize=measured?26:14;
+                value.FontWeight=measured?FontWeight.Medium:FontWeight.Normal;
+                value.Foreground=measured?_p.Text:_p.Muted;
+            }
+            Insert(elapsed);
+        }
+        if(reason!=null)
+        {
+            foreach(var value in reason.Children.OfType<SelectableTextBlock>())value.FontWeight=FontWeight.Medium;
+            Insert(reason);
+        }
+        Insert(cause);
+        if(start!=null||end!=null)
+        {
+            content.Children.Insert(insertAt++,InspectorSection("时间记录","section:playback-time"));
             Insert(start);Insert(end);
-            if(elapsed!=null){foreach(var value in elapsed.Children.OfType<SelectableTextBlock>())value.FontWeight=FontWeight.SemiBold;Insert(elapsed);}
-            Insert(reason);Insert(cause);
         }
-        if(category!=null||duration!=null)
+        if(sheet!=null||category!=null||duration!=null)
         {
-            content.Children.Insert(insertAt++,InspectorSection("Cue 信息","section:cue-info"));
+            content.Children.Insert(insertAt++,InspectorSection("声音信息","section:cue-info"));
+            if(sheet!=null)
+            {
+                var text=sheet.Children.OfType<SelectableTextBlock>().Single();
+                text.Tag="cue-sheet-name";text.TextWrapping=TextWrapping.Wrap;text.TextTrimming=TextTrimming.None;
+                ToolTip.SetTip(text,text.Text);
+                Insert(sheet);
+            }
             Insert(category);Insert(duration);
         }
     }
@@ -252,7 +273,7 @@ public sealed partial class MainWindow
     private Control NavigationContent(string caption)
     {
         var panel=new StackPanel {Orientation=Orientation.Horizontal,Spacing=6};
-        panel.Children.Add(VisualLanguage.Glyph(IconKind.Locate,_p.Text));
+        panel.Children.Add(VisualLanguage.Glyph(IconKind.Locate,_p.Muted));
         panel.Children.Add(Label(caption));
         return panel;
     }

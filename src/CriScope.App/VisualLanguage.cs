@@ -3,12 +3,17 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using CriScope.Core;
 namespace CriScope.App;
-    internal enum IconKind { None, More, Sun, Moon, Locate, Timeline, Controls, Mixer, Space, Resources, Log, Back, Pause, Play, Live, Fit, Open, Export, Down, Details, CueSheet, Source, Listener, Stop, Selector, Block, Beat, Sequence, ClockTime, RelativeTime }
+    internal enum IconKind { None, More, Sun, Moon, Locate, Timeline, Controls, Mixer, Space, Resources, Log, Back, Pause, Play, Live, Fit, Open, Export, Down, Details, CueSheet, Source, Listener, Stop, Selector, Block, Beat, Sequence, ClockTime, RelativeTime, Close, Search, Check, ChevronRight }
 
 internal enum SemanticColor { Text, Muted, Selected, Started, Ended, Warning, Aisac, Selector, Block, Beat, Sequence, Source, Listener }
 internal static class VisualLanguage
 {
     internal static string Path(IconKind icon)=>icon switch {
+        IconKind.Close=>"M6,6 L18,18 M18,6 L6,18",
+        IconKind.Search=>"M10.5,3 A7.5,7.5 0 1 1 10.49,3 M16,16 L21,21",
+        IconKind.Check=>"M5,12 L10,17 L20,6",
+        IconKind.ChevronRight=>"M9,5 L16,12 L9,19",
+        IconKind.Locate=>"M8,3 H3 V8 M16,3 H21 V8 M21,16 V21 H16 M8,21 H3 V16 M8,12 H16 M12,8 V16",
         IconKind.CueSheet=>"M4,6 L12,2 L20,6 L12,10 Z M4,11 L12,15 L20,11 M4,16 L12,20 L20,16",
         IconKind.Source=>"M3,9 H7 L12,4 V20 L7,15 H3 Z M16,8 Q21,12 16,16",
         IconKind.Listener=>"M7,8 C7,0 20,0 20,9 C20,14 14,13 14,18 C14,23 7,23 7,18 M11,9 C11,5 16,5 16,9",
@@ -54,7 +59,7 @@ internal static class VisualLanguage
         var color=palette.Semantic(EventColor(item));
         var panel=new StackPanel {Orientation=Orientation.Horizontal,Spacing=5};
         panel.Children.Add(Glyph(EventIcon(EventSemantics.IsPlaybackEnd(item)?"stop":item.kind),color,13));
-        panel.Children.Add(new TextBlock {Text=text,Foreground=color,FontSize=11,VerticalAlignment=VerticalAlignment.Center});
+        panel.Children.Add(new TextBlock {Text=text,Foreground=color,FontSize=12,VerticalAlignment=VerticalAlignment.Center});
         return panel;
     }
     internal static SemanticColor EventColor(WireEvent item)=>item.kind switch {

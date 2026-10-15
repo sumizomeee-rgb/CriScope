@@ -26,7 +26,7 @@ public sealed partial class MainWindow
         if(_relatedSession!=_session?.Id)_relatedPlayback="";
         var panel = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"), ClipToBounds=true };
         var bar = new WrapPanel {Orientation=Orientation.Horizontal,Margin=new Thickness(12,7,12,5)};
-        var search = _logSearch = new TextBox { Width=280, Text=_logQuery, PlaceholderText="搜索事件、Cue 或对象…",FontSize=12 };
+        var search = _logSearch = new TextBox { Width=280, Text=_logQuery, PlaceholderText="搜索事件、Cue 或对象",FontSize=13,Background=_p.Alternate,BorderBrush=_p.Border,CornerRadius=new CornerRadius(5) };
         search.TextChanged+=(_,_)=>{_logQuery=search.Text??""; UpdateEventLog();}; bar.Children.Add(search);
         var kind = new ComboBox {Width=150,ItemsSource=new[]{"全部","播放相关（全部）","请求播放","接入时已在播放","开始播放","请求停止","播放结束","控制","回调","异常与连接","原始协议（高级）"},SelectedItem=_logKind,FontSize=11,HorizontalAlignment=HorizontalAlignment.Stretch};
         kind.ItemTemplate=new FuncDataTemplate<string>((caption,_)=>{
@@ -34,7 +34,7 @@ public sealed partial class MainWindow
             return VisualLanguage.EventBadge(new WireEvent {kind=eventKind},caption??"全部",_p);
         });
         kind.SelectionChanged+=(_,_)=>{_logKind=kind.SelectedItem as string??"全部";UpdateEventLog();}; Grid.SetColumn(kind,1);bar.Children.Add(kind);
-        _logFollowButton=Action(_logFollowing?"暂停刷新":"继续实时",ToggleLogFollow); Grid.SetColumn(_logFollowButton,2);bar.Children.Add(_logFollowButton);
+        _logFollowButton=Action(_logFollowing?"暂停刷新":"恢复刷新",ToggleLogFollow); Grid.SetColumn(_logFollowButton,2);bar.Children.Add(_logFollowButton);
         ToolTip.SetTip(search,_relatedPlayback.Length>0?"仅关联实例；点击关联筛选 × 可退出":"搜索当前缓存中的事件");
         var earlier=Action("更早记录",()=>{_logLimit=Math.Min(20000,_logLimit+1000);UpdateEventLog();});Grid.SetColumn(earlier,3);bar.Children.Add(earlier);
         var voices=new CheckBox {Content="Voice 明细",IsChecked=_logVoices,FontSize=11,VerticalAlignment=VerticalAlignment.Center};
@@ -80,7 +80,7 @@ public sealed partial class MainWindow
     {
         _logFollowing=!_logFollowing;
         if(!_logFollowing)_logFrozen=_snapshot.ToArray();
-        if(_logFollowButton!=null)_logFollowButton.Content=ButtonContent(_logFollowing?"暂停刷新":"继续实时");
+        if(_logFollowButton!=null)_logFollowButton.Content=ButtonContent(_logFollowing?"暂停刷新":"恢复刷新");
         UpdateEventLog();
     }
     private void LocateLogEvent(WireEvent e)
@@ -124,8 +124,8 @@ public sealed partial class MainWindow
             foreach(var e in results)
             {
                 var line=new Grid{ColumnDefinitions=new ColumnDefinitions(_logCompact?"132,*,32":"132,136,2*,3*,32"),ColumnSpacing=8,
-                    RowDefinitions=new RowDefinitions(_logCompact?"Auto,Auto":"Auto"),RowSpacing=_logCompact?2:0,Margin=new Thickness(0,2)};
-                var stamp=Label(WallTime(e.time,_session),11,_p.Muted);stamp.TextTrimming=TextTrimming.CharacterEllipsis;ToolTip.SetTip(stamp,stamp.Text);line.Children.Add(stamp);
+                    RowDefinitions=new RowDefinitions(_logCompact?"Auto,Auto":"Auto"),RowSpacing=_logCompact?2:0,Margin=new Thickness(0,5)};
+                var stamp=Label(WallTime(e.time,_session),12,_p.Muted);stamp.TextTrimming=TextTrimming.CharacterEllipsis;ToolTip.SetTip(stamp,stamp.Text);line.Children.Add(stamp);
                 var badge=VisualLanguage.EventBadge(e,_logVoices&&e.entity=="voice"?(e.kind=="play"?"Voice 分配":"Voice 释放"):EventLogPresentation.Action(e),_p);
                 Grid.SetColumn(badge,1);line.Children.Add(badge);
                 var logOwner=owners.GetValueOrDefault(e.entity=="cue"?e.objectId:e.parentId);
@@ -139,7 +139,7 @@ public sealed partial class MainWindow
                     if(owner.DurationAt(e.time) is {} duration)detail+=$" · {duration:0.000} 秒";
                 }
                 if(ControlPresentation.Kinds.Contains(e.kind)&&e.kind!="sequence")detail=e.name+" = "+detail;
-                var value=Label(detail,11,e.kind=="sequence"?_p.SequenceTag(e.name):_p.Muted);ToolTip.SetTip(value,detail);
+                var value=Label(detail,12,e.kind=="sequence"?_p.SequenceTag(e.name):_p.Muted);ToolTip.SetTip(value,detail);
                 var locate=IconAction("定位此事件",IconKind.Locate,()=>LocateLogEvent(e));locate.Width=32;locate.Height=32;
                 if(_logCompact)
                 {

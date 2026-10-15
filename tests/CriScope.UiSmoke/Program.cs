@@ -87,7 +87,7 @@ public sealed class SmokeApp : Application
                     Check(cards!.GetVisualDescendants().OfType<TextBlock>().Any(label=>label.Text?.Contains("● 已断开")==true), "断线状态在客户端卡片中可见");
                     Check(!cards!.GetVisualDescendants().OfType<TextBlock>().Any(label=>label.Text?.Contains("UI TEST FIXTURE ·")==true), "机器名不占用卡片主视区");
                     var timelineTab=window.GetVisualDescendants().OfType<Button>().Single(button=>ToolTip.GetTip(button)?.ToString()=="声音时间线");
-                    Check(!timelineTab.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().Single().Data!.ToString()!.Contains("L20,12"), "时间线页签不用播放三角");
+                    Check(timelineTab.Content is TextBlock {Text:"声音时间线"}, "工作区使用文字导航，不与播放操作混淆");
                     Check(window.WindowDecorations==WindowDecorations.BorderOnly && window.CanResize && window.ShowInTaskbar, "自定义标题栏保留 resize 与任务栏");
                     var maximize=window.GetVisualDescendants().OfType<Button>().Single(button=>ToolTip.GetTip(button)?.ToString()=="最大化 / 还原");
                     Click(maximize); await Task.Delay(120); Check(window.WindowState==WindowState.Maximized,"自定义最大化按钮");
@@ -125,9 +125,9 @@ public sealed class SmokeApp : Application
                         &&ControlTipStamp(axisTimeline,a.TimeOrigin)==controlWall.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.fff"),
                         "控制行只显示钟表时间，悬停提示保留完整日期");
                     var controlTab=window.GetVisualDescendants().OfType<Button>().Single(button=>button.Tag?.ToString()=="workspace:控制");
-                    Check(controlTab.BorderThickness==new Thickness(1)
-                        &&controlTab.BorderBrush?.ToString()!=Field<object>("_p").GetType().GetProperty("Selection")!.GetValue(Field<object>("_p"))!.ToString(),
-                        "当前工作区标签使用中性边框，不显示紫色下划线");
+                    Check(controlTab.BorderThickness==new Thickness(0,0,0,2)
+                        &&controlTab.BorderBrush?.ToString()==Field<object>("_p").GetType().GetProperty("Selection")!.GetValue(Field<object>("_p"))!.ToString(),
+                        "当前工作区用底部焦点线标记，标签没有常驻外框");
                     string AxisTip() => (string)typeof(TimelineControl).GetMethod("TimeAxisToggleTip",BindingFlags.Instance|BindingFlags.NonPublic)!
                         .Invoke(Field<TimelineControl>("_timeline"),null)!;
                     Check(axisTimeline.PreferWallTime
@@ -158,9 +158,9 @@ public sealed class SmokeApp : Application
                     Click(Field<Button>("_detailsToggle"));await Task.Delay(260);
                     CheckAxisLayout("最窄窗口打开详情");
                     var detailsButton=Field<Button>("_detailsToggle");
-                    Check(detailsButton.BorderThickness==new Thickness(1)
-                        &&detailsButton.BorderBrush?.ToString()!=Field<object>("_p").GetType().GetProperty("Selection")!.GetValue(Field<object>("_p"))!.ToString(),
-                        "详情开启时使用中性全边框，不显示紫色底线");
+                    Check(detailsButton.BorderThickness==new Thickness(0)
+                        &&detailsButton.Background?.ToString()==Field<object>("_p").GetType().GetProperty("AccentSurface")!.GetValue(Field<object>("_p"))!.ToString(),
+                        "详情开启时用柔和底色标记，图标按钮保留完整命中区域");
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/axis-mode-narrow-details.png"),window.CapturePng("window"));
                     var categoryIdField=typeof(MainWindow).GetField("_categoryId",BindingFlags.Instance|BindingFlags.NonPublic)!;
                     var categoryNameField=typeof(MainWindow).GetField("_categoryName",BindingFlags.Instance|BindingFlags.NonPublic)!;
@@ -200,6 +200,13 @@ public sealed class SmokeApp : Application
                     var storedType=typeof(MainWindow).Assembly.GetType("CriScope.App.TimeAxisPreferences")!;
                     var stored=Activator.CreateInstance(storedType,[preferencesPath])!;
                     Check(!((bool)storedType.GetMethod("LoadWallTime")!.Invoke(stored,null)!),"相对时间选择写入持久偏好，重启后可重新读取");
+                    storedType.GetMethod("SaveLightTheme")!.Invoke(stored,[false]);
+                    Check(!((bool)storedType.GetMethod("LoadLightTheme")!.Invoke(stored,null)!)&&!((bool)storedType.GetMethod("LoadWallTime")!.Invoke(stored,null)!),"保存深色主题保留相对时间偏好");
+                    storedType.GetMethod("Save")!.Invoke(stored,[true]);
+                    Check(!((bool)storedType.GetMethod("LoadLightTheme")!.Invoke(stored,null)!)&&((bool)storedType.GetMethod("LoadWallTime")!.Invoke(stored,null)!),"保存时间轴模式保留深色主题偏好");
+                    storedType.GetMethod("SaveLightTheme")!.Invoke(stored,[true]);
+                    Check(((bool)storedType.GetMethod("LoadLightTheme")!.Invoke(stored,null)!)&&((bool)storedType.GetMethod("LoadWallTime")!.Invoke(stored,null)!),"浅色主题可持久保存且不覆盖时间轴模式");
+                    storedType.GetMethod("Save")!.Invoke(stored,[false]);
                     window.ApplyUiAction("workspace","播放");axisTimeline=Field<TimelineControl>("_timeline");
                     Check(!axisTimeline.PreferWallTime,"时间轴显示偏好跨工作区保留");
                     axisTimeline.SetTimeAxisMode(true);
@@ -271,7 +278,7 @@ public sealed class SmokeApp : Application
                     await Task.Delay(200);
                     var stateBefore = State().GetRawText(); var png = window.CapturePng();
                     using (var bitmap = new Bitmap(new MemoryStream(png)))
-                        Check(bitmap.PixelSize.Width > 900 && bitmap.PixelSize.Height > 500, "完整窗口真实视觉树 PNG 尺寸");
+                        Check(bitmap.PixelSize.Width == (int)Math.Ceiling(window.Bounds.Width) && bitmap.PixelSize.Height == (int)Math.Ceiling(window.Bounds.Height), "窗口截图采用稳定的逻辑尺寸，避免高 DPI 嵌套裁剪重复缩放");
                     Check(window.IsVisible && State().GetRawText() == stateBefore, "截图不关闭窗口、不改变 UI 状态");
                     using (var bitmap = new Bitmap(new MemoryStream(window.CapturePng("workspace"))))
                         Check(bitmap.PixelSize.Width < window.Bounds.Width * window.RenderScaling, "面板截图只包含工作区");
@@ -321,7 +328,7 @@ public sealed class SmokeApp : Application
                     string? problemDescription=null;
                     window.ExportProblemAsync = _ => { problemDescription=window.ProblemDescription;return Task.FromResult(a.RecordingPath); };
                     var moreButton=window.GetVisualDescendants().OfType<Button>().Single(button=>ToolTip.GetTip(button)?.ToString()=="更多操作");
-                    var exportButton=((StackPanel)((Flyout)moreButton.Flyout!).Content!).Children.OfType<Button>().Single(button=>ToolTip.GetTip(button)?.ToString()=="导出问题包…");
+                    var exportButton=window.GetVisualDescendants().OfType<Button>().Single(button=>ToolTip.GetTip(button)?.ToString()=="导出问题包…");
                     Click(exportButton);await Task.Delay(150);
                     var exportDialog=desktop.Windows.Single(w=>w!=window);
                     exportDialog.GetVisualDescendants().OfType<TextBox>().Single().Text="测试问题描述";
@@ -423,7 +430,7 @@ public sealed class SmokeApp : Application
                     var detailKind=Field<Border>("_inspector").GetVisualDescendants().OfType<SelectableTextBlock>().Single(x=>x.Tag?.ToString()=="inspector-kind");
                     var detailName=Field<Border>("_inspector").GetVisualDescendants().OfType<SelectableTextBlock>().Single(x=>x.Tag?.ToString()=="inspector-name");
                     Check(detailKind.Text=="Silent Cue"&&detailName.Text=="播放实例"&&detailKind.ContextMenu!=null
-                        &&detailKind.FontSize==16&&detailName.FontSize==11
+                        &&detailKind.FontSize==20&&detailName.FontSize==12
                         &&!Field<Border>("_inspector").GetVisualDescendants().OfType<TextBlock>().Any(x=>x.Text=="事件详情"),
                         "可复制事件名为抽屉主标题，类型作为次级说明，不重复通用标题");
                     await Task.Delay(220);
@@ -436,7 +443,7 @@ public sealed class SmokeApp : Application
                     var endedTimeSection=endedFacts.FindIndex(x=>x.Tag?.ToString()=="section:playback-time");
                     var endedReason=endedFacts.FindIndex(x=>x.Tag?.ToString()=="row:结束原因");
                     var endedDuration=endedFacts.FindIndex(x=>x.Tag?.ToString()=="row:播放历时");
-                    Check(endedTimeSection>=0&&endedDuration>endedTimeSection&&endedReason>endedDuration,"结束原因跟随播放时间数据");
+                    Check(endedDuration>=0&&endedReason>endedDuration&&endedTimeSection>endedReason,"历时和结束原因优先显示，再提供起止时间");
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/ended-detail.png"),window.CapturePng("window"));
                     window.ApplyUiAction("workspace","控制");
                     Check(Field<StackPanel>("_details").GetVisualDescendants().OfType<TextBlock>().Any(x=>x.Text is "播放历时" or "已播放" or "本次观测"),"暂停历史切页后详情仍使用恢复的时间范围，保留播放起止");
@@ -486,7 +493,7 @@ public sealed class SmokeApp : Application
                     Click(detailToggle);await Task.Delay(240);
                     Check(!State().GetProperty("inspector").GetBoolean()&&Field<Border>("_inspector") is {IsEnabled:false} hiddenDrawer&&hiddenDrawer.Bounds.Width<=1,
                         "详情抽屉收起后不残留可交互区域");
-                    Check(window.GetVisualDescendants().OfType<Button>().Any(x=>x.Content is StackPanel sp&&sp.Children.OfType<TextBlock>().Any(b=>b.Text=="全览")),"缩放按钮恢复全览短文案");
+                    Check(window.GetVisualDescendants().OfType<Button>().Any(x=>Avalonia.Automation.AutomationProperties.GetName(x)=="全览"&&x.Width==32),"全览使用有可访问名称的紧凑 SVG 按钮");
                     var controlsFixture=new[] {
                         new WireEvent {kind="aisac",session="n",seq=1,time=1,objectId="p1",name="Attack",value=0},
                         new WireEvent {kind="aisac",session="n",seq=2,time=2,objectId="p2",name="Attack",value=.05},
@@ -637,8 +644,8 @@ public sealed class SmokeApp : Application
                     Check(EventLogPresentation.Project(lifecycle,true).Count(e=>e.kind=="play")==3,"声部明细保留全部分配记录");
                     var selectedCard=Field<StackPanel>("_sessions").GetLogicalDescendants().OfType<Button>().Single(b=>b.Tag?.ToString()=="selected-client");
                     Check(selectedCard.BorderThickness.Left==3
-                        &&selectedCard.BorderBrush?.ToString()!=Field<object>("_p").GetType().GetProperty("Selection")!.GetValue(Field<object>("_p"))!.ToString(),
-                        "客户端选中行使用中性左边线");
+                        &&selectedCard.BorderBrush?.ToString()==Field<object>("_p").GetType().GetProperty("Selection")!.GetValue(Field<object>("_p"))!.ToString(),
+                        "客户端选中行使用统一的焦点色与左边线");
                     window.ApplyUiAction("workspace","Timeline");window.ApplyUiAction("select","1");
                     Check(Field<StackPanel>("_details").Children.OfType<Border>().Any(b=>b.Tag?.ToString()=="section:playback-time")&&Field<StackPanel>("_details").Children.OfType<Grid>().Any(g=>g.Tag?.ToString()=="row:已播放"),"播放时间以紧凑属性行呈现");
                     var stopRequest=new WireEvent {kind="stop-request",entity="cue",objectId=navRequest.objectId,time=2,endReason="playback-stop",session=navSession.Id};
@@ -702,8 +709,8 @@ public sealed class SmokeApp : Application
                     var elapsedRow=drawer.Children.ToList().FindIndex(x=>x.Tag?.ToString()=="row:已播放");
                     var cueSection=drawer.Children.ToList().FindIndex(x=>x.Tag?.ToString()=="section:cue-info");
                     var cueDuration=drawer.Children.OfType<Grid>().Single(x=>x.Tag?.ToString()=="row:Cue 时长");
-                    Check(timeSection>=0&&timeSection<elapsedRow&&elapsedRow<cueSection&&cueSection<drawer.Children.IndexOf(cueDuration)&&cueDuration.Children.OfType<SelectableTextBlock>().Single().FontSize==13,"观测历时先于 Cue 配置信息，Cue 时长不再放大");
-                    Check(drawer.Children.OfType<Expander>().Count()==1 && drawer.Children.OfType<Expander>().Single().Header?.ToString()=="更多信息","详情仅有一个更多信息折叠");
+                    Check(elapsedRow>=0&&elapsedRow<timeSection&&timeSection<cueSection&&cueSection<drawer.Children.IndexOf(cueDuration)&&cueDuration.Children.OfType<SelectableTextBlock>().Single().FontSize==13,"观测历时先于 Cue 配置信息，Cue 时长不再放大");
+                    Check(drawer.Children.OfType<Expander>().Count()==1 && drawer.Children.OfType<Expander>().Single().Header?.ToString()=="技术详情","详情仅有一个更多信息折叠");
                     var cueText=Field<Border>("_inspector").GetVisualDescendants().OfType<SelectableTextBlock>().Single(x=>x.Tag?.ToString()=="inspector-kind");
                     Check(cueText.Text=="Music Fixture"&&cueText.ContextMenu!=null,"顶栏 Cue 名称可选择并复制完整名称");
                     Check(drawer.GetLogicalDescendants().OfType<TextBlock>().Where(x=>!string.IsNullOrWhiteSpace(x.Text)).All(x=>x.ContextMenu!=null),"抽屉正文、属性标签与高级记录的每段文字均可右键复制");

@@ -41,6 +41,8 @@ public sealed partial class MainWindow : Window
     private SelectableTextBlock _inspectorKind = null!, _inspectorName = null!, _inspectorInstance = null!;
     private ListBox _events = null!;
     private TextBlock _states = null!, _status = null!, _range = null!;
+    private TextBlock _sessionTitle = null!, _sessionSubtitle = null!;
+    private Button _exportButton = null!;
     private TextBox _filter = null!;
     private Button _live = null!;
     private Grid _body = null!;
@@ -103,7 +105,7 @@ public sealed partial class MainWindow : Window
         _collector = collector;
         _timeAxisPreferences = new TimeAxisPreferences(preferencesPath);
         _preferWallTimeAxis = _timeAxisPreferences.LoadWallTime();
-        Title = "CriScope · Audio observatory";
+        Title = "CriScope · 音频观测";
         ExtendClientAreaToDecorationsHint = true;
         WindowDecorations = WindowDecorations.BorderOnly;
         ExtendClientAreaTitleBarHeightHint = 36;
@@ -113,7 +115,7 @@ public sealed partial class MainWindow : Window
         Width = 1480; Height = 900; MinWidth = 980; MinHeight = 650;
         FontFamily = new FontFamily("Segoe UI, Microsoft YaHei UI");
         var launch = Environment.GetCommandLineArgs();
-        _p = new Palette(launch.Contains("--light"));
+        _p = new Palette(launch.Contains("--light") || !launch.Contains("--dark") && _timeAxisPreferences.LoadLightTheme());
         var modeIndex = Array.IndexOf(launch, "--view");
         if (modeIndex >= 0 && modeIndex + 1 < launch.Length && new[] { "Timeline", "AISAC", "Performance", "Location", "Mixing", "Logs" }.Contains(launch[modeIndex + 1])) _mode = launch[modeIndex + 1];
         Build();
@@ -159,30 +161,23 @@ public sealed partial class MainWindow : Window
     { Text = text, FontSize = size, Foreground = color ?? _p.Text, VerticalAlignment = VerticalAlignment.Center };
     private Button Action(string text, Action action, bool accent = false)
     {
-        var b = new Button { Content = ButtonContent(text,accent), FontSize = UiMetrics.ControlSize, Padding = new Thickness(UiMetrics.Space3, 7),
-            Background = accent ? _p.Text : Brushes.Transparent, Foreground = accent ? _p.Canvas : _p.Text,
-            BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(4) };
-        b.PointerEntered += (_, _) => b.Background = accent ? _p.Muted : _p.Hover;
-        b.PointerExited += (_, _) => b.Background = accent ? _p.Text : Brushes.Transparent;
+        var b = new Button { Content = ButtonContent(text,accent), FontSize = UiMetrics.ControlSize,
+            MinHeight = 34, Padding = new Thickness(12, 6),
+            Background = accent ? _p.Selection : Brushes.Transparent, Foreground = accent ? _p.Canvas : _p.Text,
+            BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(5) };
+        RefineButton(b, accent);
         ToolTip.SetTip(b, text);
         b.Click += (_, _) => action(); return b;
     }
     private Button WorkspaceTab(string text, Action action, bool selected)
     {
-        var content=ButtonContent(text);
-        content.Opacity=selected?1:.82;
-        if(content is StackPanel panel)
-            foreach(var label in panel.Children.OfType<TextBlock>())
-                label.FontWeight=selected?FontWeight.SemiBold:FontWeight.Normal;
-        var tab=new Button {Content=content,FontSize=UiMetrics.ControlSize,
-            Padding=new Thickness(UiMetrics.Space3,7),MinHeight=34,
-            Background=selected?_p.WorkspaceActive:Brushes.Transparent,
-            BorderBrush=selected?_p.WorkspaceActiveBorder:Brushes.Transparent,
-            BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(2),Tag="workspace:"+text};
-        tab.PointerEntered+=(_,_)=>{if(!selected){tab.Background=_p.WorkspaceHover;content.Opacity=1;}};
-        tab.PointerExited+=(_,_)=>{tab.Background=selected?_p.WorkspaceActive:Brushes.Transparent;content.Opacity=selected?1:.82;};
-        tab.GotFocus+=(_,_)=>tab.BorderBrush=_p.Text;
-        tab.LostFocus+=(_,_)=>tab.BorderBrush=selected?_p.WorkspaceActiveBorder:Brushes.Transparent;
+        var tab = new Button { Content = Label(text,13,selected?_p.Text:_p.Muted),
+            Padding = new Thickness(12,0), Height = UiMetrics.NavigationHeight,
+            Background = Brushes.Transparent, BorderBrush = selected?_p.Selection:Brushes.Transparent,
+            BorderThickness = new Thickness(0,0,0,2), CornerRadius = new CornerRadius(0),
+            Tag = "workspace:"+text };
+        if(tab.Content is TextBlock title) title.FontWeight=selected?FontWeight.SemiBold:FontWeight.Normal;
+        RefineButton(tab);
         ToolTip.SetTip(tab,text);
         tab.Click+=(_,_)=>action();
         return tab;
@@ -193,8 +188,8 @@ public sealed partial class MainWindow : Window
         var icon = text switch {
             "声音时间线"=>IconKind.Timeline, "控制"=>IconKind.Controls, "混音"=>IconKind.Mixer,
             "空间"=>IconKind.Space, "资源"=>IconKind.Resources, "事件日志"=>IconKind.Log,
-            "返回上一位置"=>IconKind.Back, "暂停刷新" or "暂停回放"=>IconKind.Pause,
-            "播放回放"=>IconKind.Play, "继续实时" or "返回实时" or "跟随最新" or "跟随最新 · 开"=>IconKind.Live,
+            "返回上一位置"=>IconKind.Back, "暂停刷新" or "暂停回放" or "暂停跟随" or "暂停浏览"=>IconKind.Pause,
+            "播放回放" or "自动浏览"=>IconKind.Play, "继续实时" or "返回实时" or "跟随最新" or "跟随最新 · 开"=>IconKind.Live,
             "全览"=>IconKind.Fit, "导入日志…" or "打开日志目录" or "打开文件夹"=>IconKind.Open,
             "导出问题包…" or "导出"=>IconKind.Export, "更早记录"=>IconKind.Down,
             "详情"=>IconKind.Details, "查看 Voice 轨道"=>IconKind.Locate, _=>IconKind.None };
@@ -217,12 +212,18 @@ public sealed partial class MainWindow : Window
         _rebuilding = true;
         RequestedThemeVariant = _p.Light ? ThemeVariant.Light : ThemeVariant.Dark;
         Background = _p.Canvas;
-        var root = new Grid { RowDefinitions = new RowDefinitions("36,40,*,Auto") };
+        var root = new Grid { RowDefinitions = new RowDefinitions("36,64,*,Auto") };
         root.Children.Add(new WindowTitleBar(this, _p));
-        var top = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(UiMetrics.PanelInset, 0) };
-        _states = Label("未连接", 12, _p.Muted);
-        _states.TextTrimming = TextTrimming.CharacterEllipsis;
-        top.Children.Add(_states);
+        var top = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), Margin = new Thickness(22,0) };
+        var identity = new StackPanel { Spacing=3, VerticalAlignment=VerticalAlignment.Center, Margin=new Thickness(0,0,20,0) };
+        _sessionTitle = Label("开始一次音频观测",18); _sessionTitle.FontWeight=FontWeight.SemiBold;
+        _sessionTitle.TextTrimming=TextTrimming.CharacterEllipsis;
+        _sessionSubtitle = Label("连接游戏，或打开已有记录",12,_p.Muted);
+        _sessionSubtitle.TextTrimming=TextTrimming.CharacterEllipsis;
+        identity.Children.Add(_sessionTitle); identity.Children.Add(_sessionSubtitle); top.Children.Add(identity);
+        _states = Label("等待连接",12,_p.Muted); _states.Margin=new Thickness(0,0,20,0);
+        _states.MaxWidth=300; _states.TextTrimming=TextTrimming.CharacterEllipsis;
+        Grid.SetColumn(_states,1); top.Children.Add(_states);
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
         var importLog=Action("导入日志…", async () =>
         {
@@ -237,24 +238,25 @@ public sealed partial class MainWindow : Window
         });
         ToolTip.SetTip(importLog,"选择一个 CriScope 日志文件，在左侧新增只读历史会话；不会移动或修改原文件");
         var openLogDirectory=Action("打开日志目录", OpenLogDirectory);
-        var export=Action("导出问题包…",async()=>await ExportProblem());
+        var export=_exportButton=Action("导出问题包…",async()=>await ExportProblem(),true);
+        export.IsEnabled=_session!=null;
         var more=IconAction("更多操作",IconKind.More,()=>{});
-        foreach(var item in new[]{importLog,openLogDirectory,export})
+        foreach(var item in new[]{importLog,openLogDirectory})
         {
             item.HorizontalAlignment=HorizontalAlignment.Stretch;
             item.HorizontalContentAlignment=HorizontalAlignment.Left;
             item.Padding=new Thickness(UiMetrics.Space3,UiMetrics.Space2);
         }
-        var menu=new Flyout {Content=new StackPanel {Spacing=UiMetrics.Space1,MinWidth=176,Children={importLog,openLogDirectory,export}}};
-        more.Flyout=menu;importLog.Click+=(_,_)=>menu.Hide();openLogDirectory.Click+=(_,_)=>menu.Hide();export.Click+=(_,_)=>menu.Hide();actions.Children.Add(more);
-        actions.Children.Add(IconAction(_p.Light?"切换到深色":"切换到浅色",_p.Light?IconKind.Moon:IconKind.Sun,()=>{SaveView();_p=new Palette(!_p.Light);Build();RestoreView();Refresh();}));
-        Grid.SetColumn(actions, 1); top.Children.Add(actions); var topSurface = Surface(top, _p.Shell); Grid.SetRow(topSurface, 1); root.Children.Add(topSurface);
+        var menu=new Flyout {Content=new StackPanel {Spacing=UiMetrics.Space1,MinWidth=176,Children={importLog,openLogDirectory}}};
+        more.Flyout=menu;importLog.Click+=(_,_)=>menu.Hide();openLogDirectory.Click+=(_,_)=>menu.Hide();actions.Children.Add(export);actions.Children.Add(more);
+        actions.Children.Add(IconAction(_p.Light?"切换到深色":"切换到浅色",_p.Light?IconKind.Moon:IconKind.Sun,()=>{SaveView();_p=new Palette(!_p.Light);_timeAxisPreferences.SaveLightTheme(_p.Light);Build();RestoreView();Refresh();}));
+        Grid.SetColumn(actions, 2); top.Children.Add(actions); var topSurface = Surface(top, _p.Shell); Grid.SetRow(topSurface, 1); root.Children.Add(topSurface);
 
-        _body = new Grid { ColumnDefinitions = new ColumnDefinitions("208,*,Auto") };
+        _body = new Grid { ColumnDefinitions = new ColumnDefinitions("220,*,Auto") };
         var side = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
         var sideHeading = new StackPanel { Margin = new Thickness(UiMetrics.PanelInset, 20, UiMetrics.Space3, UiMetrics.PanelInset), Spacing = 6 };
-        sideHeading.Children.Add(Label("会话", 17));
-        _serverStatus = new TextBlock { Text = "等待游戏接入", TextWrapping = TextWrapping.Wrap, Foreground = _p.Good, FontSize = UiMetrics.CaptionSize, Margin = new Thickness(0,UiMetrics.Space2,0,0) };
+        sideHeading.Children.Add(Label("连接与记录", 13, _p.Muted));
+        _serverStatus = new TextBlock { Text = "等待游戏接入", TextWrapping = TextWrapping.Wrap, Foreground = _p.Muted, FontSize = UiMetrics.CaptionSize, Margin = new Thickness(0,UiMetrics.Space1,0,0) };
         ToolTip.SetTip(_serverStatus,"接收端口 18961 · 同机多实例可能受 CRI 原生端口限制");
         sideHeading.Children.Add(_serverStatus);
         side.Children.Add(sideHeading);
@@ -266,7 +268,7 @@ public sealed partial class MainWindow : Window
         var main = _main = new Grid { RowDefinitions = new RowDefinitions(_diagnostics
             ? $"{UiMetrics.NavigationHeight},{UiMetrics.ToolbarHeight},*,28,260"
             : $"{UiMetrics.NavigationHeight},{UiMetrics.ToolbarHeight},*,28,0") };
-        var nav = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 3, Margin = new Thickness(UiMetrics.PanelInset, 5, UiMetrics.Space2, 5) };
+        var nav = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2, Margin = new Thickness(12, 0, UiMetrics.Space2, 0) };
         foreach (var (id, title) in new[] { ("Timeline", "声音时间线"), ("AISAC", "控制"), ("Mixing", "混音"), ("Location", "空间"), ("Performance", "资源"), ("Logs", "事件日志") })
         {
             var mode = id;
@@ -282,16 +284,15 @@ public sealed partial class MainWindow : Window
         workspaceBar.Children.Add(navViewport);
         var drawers = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(6,8,14,8) };
         // Event log has one visible entry: the workspace tab.
-        _detailsToggle = new Button { Content = ButtonContent("详情"), FontSize = 12, Padding = new Thickness(10, 5),
-            Foreground = _p.Text, CornerRadius = new CornerRadius(4) };
+        _detailsToggle = IconAction("显示详情",IconKind.Details,()=>{});
         _detailsToggle.PointerEntered += (_, _) => { if (!_showInspector) _detailsToggle.Background = _p.Hover; };
         _detailsToggle.PointerExited += (_, _) => UpdateDetailsToggle();
         _detailsToggle.Click += (_, _) => { _showInspector = !_showInspector; Responsive(); };
         drawers.Children.Add(_detailsToggle);
         Grid.SetColumn(drawers,1); workspaceBar.Children.Add(drawers);
         main.Children.Add(Surface(workspaceBar, _p.Canvas));
-        var toolbar = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto,Auto"), Margin = new Thickness(UiMetrics.PanelInset, 5) };
-        _filter = new TextBox { PlaceholderText = "筛选名称、对象、类型或内容…", FontSize = 12, Background = _p.Panel, BorderBrush = _p.Border, MinWidth = 120 };
+        var toolbar = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto,Auto"), Margin = new Thickness(UiMetrics.PanelInset, 8) };
+        _filter = new TextBox { PlaceholderText = "搜索声音、对象或参数", FontSize = 13, Background = _p.Alternate, BorderBrush = _p.Border, BorderThickness=new Thickness(1), CornerRadius=new CornerRadius(5), MinHeight=34, MinWidth = 120 };
         _filter.TextChanged += (_, _) => { if (!_rebuilding) { _filterException=null; UpdateEvents(); } };
         _categoryChip=Action("清除筛选",()=>{_categoryId="";_categoryName="";_filterException=null;UpdateEvents();});
         _categoryChip.MaxWidth=150;_categoryChip.Padding=new Thickness(8,4);_categoryChip.Margin=new Thickness(0,0,8,0);
@@ -299,10 +300,10 @@ public sealed partial class MainWindow : Window
         Grid.SetColumn(_filter,1); toolbar.Children.Add(_filter);
         _live = Action("跟随最新", ToggleView); _live.Margin = new Thickness(8, 0, 0, 0);
         Grid.SetColumn(_live, 2); toolbar.Children.Add(_live);
-        _windowRange = new ComboBox { ItemsSource = new[] { "最近 10 秒", "最近 30 秒", "最近 2 分钟", "自定义范围" }, SelectedIndex = 1, MinWidth = 118, FontSize = 11, Margin = new Thickness(8,0,0,0) };
+        _windowRange = new ComboBox { ItemsSource = new[] { "最近 10 秒", "最近 30 秒", "最近 2 分钟", "自定义范围" }, SelectedIndex = 1, MinWidth = 118, FontSize = 12, Background=_p.Canvas, BorderBrush=_p.Border, CornerRadius=new CornerRadius(5), MinHeight=34, Margin = new Thickness(8,0,0,0) };
         _windowRange.SelectionChanged += (_,_) => { if (_rebuilding || _timeline == null || _windowRange.SelectedIndex > 2) return; _timeline.Span = new[] {10d,30d,120d}[_windowRange.SelectedIndex]; Refresh(); };
         Grid.SetColumn(_windowRange, 3); toolbar.Children.Add(_windowRange);
-        var fit = Action("全览", ()=>ApplyUiAction("fit",null)); fit.Margin = new Thickness(8, 0, 0, 0); Grid.SetColumn(fit, 4); toolbar.Children.Add(fit);
+        var fit = IconAction("全览",IconKind.Fit, ()=>ApplyUiAction("fit",null)); fit.Margin = new Thickness(8, 0, 0, 0); Grid.SetColumn(fit, 4); toolbar.Children.Add(fit);
         if(_mode is "Location" or "Mixing"){fit.IsVisible=false;_windowRange.IsVisible=false;}
         ToolTip.SetTip(fit, "一次性缩放到当前保留的事件范围，并暂停跟随；不停止采集");
         Grid.SetRow(toolbar, 1); main.Children.Add(toolbar);
@@ -313,32 +314,33 @@ public sealed partial class MainWindow : Window
         _timeline.PlaybackRequested += item=>Navigate("Timeline",item);
         _timeline.TimeAxisModeChanged += wall=>{_preferWallTimeAxis=wall;_timeAxisPreferences.Save(wall);};
         _timeline.SelectionCleared += () => { _selected = null; Inspector(); };
-        _timeline.ViewChanged += () => { if (!_timeline.Live) _playing = false; _live.Content = ButtonContent(_timeline.Live ? "跟随最新 · 开" : "返回实时"); UpdateRange(); UpdateEvents(); };
+        _timeline.ViewChanged += () => { if (!_timeline.Live) _playing = false; _live.Content = ButtonContent(_timeline.Live ? "暂停跟随" : "返回实时"); UpdateRange(); UpdateEvents(); };
         Grid.SetRow(_timeline, 2); main.Children.Add(_timeline);
         _timeline.IsVisible=_mode!="Logs";
-        _range = Label("事件证据  /  单调时间基准", 11, _p.Muted); _range.Margin = new Thickness(16, 0);
+        _range = Label("", 11, _p.Muted); _range.Margin = new Thickness(16, 0);
         ToolTip.SetTip(_range,"时间窗口可包含已结束的历史记录；钟表时间由接收锚点估算");
-        var rangeBorder = Surface(_range, _p.Alternate); Grid.SetRow(rangeBorder, 3); main.Children.Add(rangeBorder);
+        var rangeBorder = Surface(_range, _p.Canvas); Grid.SetRow(rangeBorder, 3); main.Children.Add(rangeBorder);
         var eventLog=BuildEventLog();
         Grid.SetRow(eventLog,_mode=="Logs"?2:4); main.Children.Add(eventLog);
         if(_mode=="Logs"){main.RowDefinitions[4].Height=new GridLength(0);main.RowDefinitions[3].Height=new GridLength(0);_range.IsVisible=false;}
         Grid.SetColumn(main, 1); _body.Children.Add(main);
 
-        _details = new StackPanel { Spacing = UiMetrics.Space1, Margin = new Thickness(UiMetrics.PanelInset, UiMetrics.Space3) };
+        _details = new StackPanel { Spacing = UiMetrics.Space1, Margin = new Thickness(22, 18) };
         var drawer = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
         var drawerHeading = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto"), ColumnDefinitions = new ColumnDefinitions("*,Auto"),
-            Margin = new Thickness(UiMetrics.PanelInset, 9, 10, 0) };
-        _inspectorKind = new SelectableTextBlock {Tag="inspector-kind",Text="详情",FontSize=16,FontWeight=FontWeight.SemiBold,
+            Margin = new Thickness(22, 18, 16, 0) };
+        _inspectorKind = new SelectableTextBlock {Tag="inspector-kind",Text="详情",FontSize=20,FontWeight=FontWeight.SemiBold,
             Foreground=_p.Muted,VerticalAlignment=VerticalAlignment.Center,TextWrapping=TextWrapping.Wrap,
-            TextTrimming=TextTrimming.CharacterEllipsis,MaxLines=2};
+            TextTrimming=TextTrimming.CharacterEllipsis,MaxLines=3};
         AddCopyMenu(_inspectorKind,"复制事件名称");
         drawerHeading.Children.Add(_inspectorKind);
-        var closeDetails = new Button { Content = "×", FontSize = 22, Width = 32, Height = 32, Padding = new Thickness(0), HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center };
+        var closeDetails = IconAction("关闭详情",IconKind.Close,()=>{});
+        closeDetails.VerticalAlignment=VerticalAlignment.Top;
         ToolTip.SetTip(closeDetails, "关闭详情");
         closeDetails.Click += (_, _) => { _showInspector = false; Responsive(); };
         Grid.SetColumn(closeDetails, 1); drawerHeading.Children.Add(closeDetails);
-        _inspectorName = new SelectableTextBlock {Tag="inspector-name",Text="",FontSize=11,
-            Foreground=_p.Muted,Margin=new Thickness(0,2,0,10)};
+        _inspectorName = new SelectableTextBlock {Tag="inspector-name",Text="",FontSize=12,
+            Foreground=_p.Muted,Margin=new Thickness(0,6,0,18)};
         AddCopyMenu(_inspectorName,"复制事件类型");
         Grid.SetRow(_inspectorName,1);drawerHeading.Children.Add(_inspectorName);
         _inspectorInstance = new SelectableTextBlock {Tag="inspector-instance",FontSize=11,Foreground=_p.Muted,
@@ -361,19 +363,19 @@ public sealed partial class MainWindow : Window
         Grid.SetColumn(_inspector, 2); _body.Children.Add(_inspector);
         Grid.SetRow(_body, 2); root.Children.Add(_body);
         _status = Label("正在启动接收器…", 11, _p.Muted); _status.Margin = new Thickness(15, 0);
-        var footer = new StackPanel();
-        _status.MinHeight = 29; footer.Children.Add(_status);
-        _savedPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Margin = new Thickness(15,0,15,6), IsVisible = false };
-        _savedNotice = Label("",11,_p.Good); _savedNotice.TextTrimming = TextTrimming.CharacterEllipsis; _savedNotice.MaxWidth = 260;
+        var footer = new Grid { ColumnDefinitions=new ColumnDefinitions("*,Auto"),MinHeight=36 };
+        _status.TextTrimming=TextTrimming.CharacterEllipsis; _status.MinHeight = 34; footer.Children.Add(_status);
+        _savedPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(15,0,15,0), VerticalAlignment=VerticalAlignment.Center, IsVisible = false };
+        _savedNotice = Label("",11,_p.Muted); _savedNotice.TextTrimming = TextTrimming.CharacterEllipsis; _savedNotice.MaxWidth = 260;
         AddCopyMenu(_savedNotice,()=>ToolTip.GetTip(_savedNotice)?.ToString()??"","复制日志路径");
         _savedPanel.Children.Add(_savedNotice);
-        _savedPanel.Children.Add(Action("打开文件夹", () =>
+        _savedPanel.Children.Add(IconAction("打开文件夹",IconKind.Open, () =>
         {
             if (string.IsNullOrEmpty(_visibleLogPath)) return;
             var folder = Path.GetDirectoryName(_visibleLogPath);
             if (folder != null && Directory.Exists(folder)) System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = folder, UseShellExecute = true });
         }));
-        footer.Children.Add(_savedPanel); var status = Surface(footer, _p.Shell); Grid.SetRow(status, 3); root.Children.Add(status);
+        Grid.SetColumn(_savedPanel,1); footer.Children.Add(_savedPanel); var status = Surface(footer, _p.Shell); Grid.SetRow(status, 3); root.Children.Add(status);
         Content = root;
         _timeline.Events = _snapshot;
         _sessionSignature = "!"; _rebuilding = false;
@@ -389,16 +391,16 @@ public sealed partial class MainWindow : Window
         _inspector.Width = _showInspector ? InspectorWidth() : 0;
         _inspector.Opacity = _showInspector ? 1 : 0;
         _inspector.IsEnabled = _showInspector;
-        _body.ColumnDefinitions[0].Width = new GridLength(!wide && _showInspector ? 0 : Bounds.Width < 1100 ? 165 : 208);
+        _body.ColumnDefinitions[0].Width = new GridLength(!wide && _showInspector ? 0 : Bounds.Width < 1100 ? 175 : 220);
         UpdateDetailsToggle();
     }
     private double InspectorWidth() => Bounds.Width >= 1260 ? 372 : 344;
     private void UpdateDetailsToggle()
     {
         if (_detailsToggle == null) return;
-        _detailsToggle.Background = _showInspector ? _p.Panel : Brushes.Transparent;
+        _detailsToggle.Background = _showInspector ? _p.AccentSurface : Brushes.Transparent;
         _detailsToggle.BorderBrush = _p.Border;
-        _detailsToggle.BorderThickness = _showInspector ? new Thickness(1) : new Thickness(0);
+        _detailsToggle.BorderThickness = new Thickness(0);
         ToolTip.SetTip(_detailsToggle, _showInspector ? "隐藏事件详情" : "显示事件详情");
     }
     private void SaveView()
@@ -476,7 +478,8 @@ public sealed partial class MainWindow : Window
             _ => throw new ArgumentException("未知面板：" + panel)
         };
         if (!visual.IsVisible || visual.Bounds.Width < 1 || visual.Bounds.Height < 1) throw new InvalidOperationException("面板当前不可见");
-        var scale = RenderScaling;
+        // 统一按逻辑像素导出，与命令行截图一致。高 DPI 离屏绘制的嵌套裁剪会重复缩放自绘轨道。
+        const double scale = 1;
         using var bitmap = new RenderTargetBitmap(new PixelSize((int)Math.Ceiling(visual.Bounds.Width * scale), (int)Math.Ceiling(visual.Bounds.Height * scale)), new Vector(96 * scale, 96 * scale));
         bitmap.Render(visual);
         using var stream = new MemoryStream(); bitmap.Save(stream, PngBitmapEncoderOptions.Default); return stream.ToArray();
@@ -511,7 +514,7 @@ public sealed partial class MainWindow : Window
                 _timeline.SetSpatialLayer(layerParts[0] switch { "sources" => "source", "listeners" => "distance-listener", _ => layerParts[0] },bool.Parse(layerParts[1])); break;
             case "theme":
                 var light = (value ?? "toggle").ToLowerInvariant() switch { "light" or "浅色" => true, "dark" or "暗色" => false, "toggle" => !_p.Light, _ => throw new ArgumentException("theme 需要 light / dark / toggle") };
-                SaveView(); _p = new Palette(light); Build(); RestoreView(); break;
+                SaveView(); _p = new Palette(light); _timeAxisPreferences.SaveLightTheme(light); Build(); RestoreView(); break;
             case "diagnostics":
                 _diagnostics = (value ?? "toggle").ToLowerInvariant() switch { "true" or "1" or "open" => true, "false" or "0" or "close" => false, "toggle" => !_diagnostics, _ => throw new ArgumentException("diagnostics 需要 true / false / toggle") };
                 _main.RowDefinitions[4].Height = new GridLength(_diagnostics && _mode!="Logs" ? 260 : 0); UpdateEvents(); break;
@@ -639,7 +642,7 @@ public sealed partial class MainWindow : Window
             {
                 var preferred = ClientCardPresentation.Default(group);
                 bool selected = _session != null && group.Contains(_session);
-                var card = new StackPanel { Spacing = 6, Margin = new Thickness(8,3) };
+                var card = new StackPanel { Spacing = 4, Margin = new Thickness(10,3) };
                 var duplicateName = clientGroups.Count(other => string.Equals(ClientCardPresentation.Title(ClientCardPresentation.Default(other)), ClientCardPresentation.Title(preferred), StringComparison.OrdinalIgnoreCase)) > 1;
                 var headingLine = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), ColumnSpacing = 7 };
                 var platformIcon = PlatformIcons.Glyph(ClientCardPresentation.PlatformKey(preferred), _p.Text, 17);
@@ -654,7 +657,7 @@ public sealed partial class MainWindow : Window
                 var statusColor = cardStatus == "在线" || cardStatus == "记录中" ? _p.Good : cardStatus == "已断开" ? _p.Error : _p.Signal;
                 var status = Label("● " + cardStatus, 10, statusColor);
                 Grid.SetColumn(status, 2); headingLine.Children.Add(status);
-                var lines = new StackPanel { Spacing = 8 };
+                var lines = new StackPanel { Spacing = 7 };
                 lines.Children.Add(headingLine);
                 var platformLabel = ClientCardPresentation.PlatformLabel(preferred);
                 if (ClientCardPresentation.Title(preferred) != platformLabel)
@@ -664,10 +667,10 @@ public sealed partial class MainWindow : Window
                 if (duplicateName && !preferred.IsReplay) lines.Children.Add(Label($"进程 {preferred.Pid}", 10, _p.Muted));
                 var heading = Action("",()=>SelectSession(preferred)); heading.Content=lines;
                 heading.HorizontalAlignment=HorizontalAlignment.Stretch;heading.HorizontalContentAlignment=HorizontalAlignment.Left;
-                heading.Padding=new Thickness(10,12);heading.BorderBrush=selected?_p.Muted:Brushes.Transparent;
-                heading.BorderThickness=selected?new Thickness(3,0,0,0):new Thickness(0);heading.Background=selected?_p.Alternate:Brushes.Transparent;
+                heading.Padding=new Thickness(12,14);heading.BorderBrush=selected?_p.Selection:Brushes.Transparent;
+                heading.BorderThickness=selected?new Thickness(3,0,0,0):new Thickness(0);heading.Background=selected?_p.AccentSurface:Brushes.Transparent;
                 heading.Tag=selected?"selected-client":"client";
-                heading.PointerExited+=(_,_)=>heading.Background=selected?_p.Alternate:Brushes.Transparent;
+                heading.PointerExited+=(_,_)=>heading.Background=selected?_p.AccentSurface:Brushes.Transparent;
                 ToolTip.SetTip(heading, $"{preferred.Name}\n{preferred.Machine} · {preferred.Platform}\nPID {preferred.Pid}");
                 card.Children.Add(heading);
                 _sessions.Children.Add(card);
@@ -675,14 +678,17 @@ public sealed partial class MainWindow : Window
         }
         if (_session is { } s)
         {
+            _sessionTitle.Text=ClientCardPresentation.Title(s);
+            _sessionSubtitle.Text=(ClientCardPresentation.Title(s)==ClientCardPresentation.PlatformLabel(s)?"":ClientCardPresentation.PlatformLabel(s)+"  ·  ")+ClientCardPresentation.Address(s)+(s.IsReplay?"":"  ·  PID "+s.Pid);
+            _exportButton.IsEnabled=true;
             var replay = s.IsReplay;
             var recordingTargets = RecordingTargets(s);
             var recordingCount = recordingTargets.Count(target => target.Recording);
             var recordingErrors = recordingTargets.Where(target => !string.IsNullOrWhiteSpace(target.Error))
                 .Select(target => $"{(target.Channel == "native" ? "原生" : target.Channel == "sdk" ? "SDK" : "事件")}：{target.Error}").ToArray();
-            var connection=replay?"历史录制":s.ConnectionStatus;
+            var connection=replay?"历史记录":s.Connected?"已连接":"已断开";
             _states.Text=recordingErrors.Length>0?$"{connection} · 自动日志异常"
-                : recordingCount>0?$"{connection} · ● {recordingCount} 通道自动记录中":connection;
+                : recordingCount>0?$"●  正在记录 · {recordingCount} 个通道":connection;
             _states.Foreground=recordingErrors.Length>0?_p.Error:recordingCount>0?_p.Good:_p.Muted;
             _states.TextTrimming = TextTrimming.CharacterEllipsis;
             ToolTip.SetTip(_states, recordingErrors.Length>0?string.Join("\n",recordingErrors):_states.Text);
@@ -721,16 +727,19 @@ public sealed partial class MainWindow : Window
                 _timeline.End += .3;
                 if (_timeline.End >= visibleEnd) _playing = false;
             }
-            _status.Text = _error ?? s.Error ?? $"事件 {s.Total:N0}   ·   丢失 {s.Dropped:N0}   ·   缓存 {_snapshot.Count(e=>!CueCatalogIndex.IsMetadata(e)):N0}";
-            _status.Foreground = _error != null || s.Error != null ? _p.Error : _p.Muted;
+            var lost=recordingTargets.Length>0?recordingTargets.Sum(target=>target.Dropped):s.Dropped;
+            var received=recordingTargets.Length>0?recordingTargets.Sum(target=>target.Total):s.Total;
+            _status.Text = _error ?? s.Error ?? $"{(s.IsReplay?"记录":"已接收")} {received:N0} 条"+(lost>0?$"  ·  缺失 {lost:N0} 条记录":"");
+            _status.Foreground = _error != null || s.Error != null ? _p.Error : lost>0?_p.Signal:_p.Muted;
             ToolTip.SetTip(_status,s.ConnectionStatus+" · 内存缓存仅保留最近窗口；完整日志见底部文件夹入口");
         }
         else _status.Text = _error ?? _collector.Status;
-        _live.Content = ButtonContent(_session?.IsReplay == true ? _playing ? "暂停回放" : "播放回放" : _timeline.Live ? "跟随最新 · 开" : "返回实时");
+        _live.Content = ButtonContent(_session?.IsReplay == true ? _playing ? "暂停浏览" : "自动浏览" : _timeline.Live ? "暂停跟随" : "返回实时");
         _live.IsEnabled = _session != null;
         var preset = Math.Abs(_timeline.Span-10)<.01 ? 0 : Math.Abs(_timeline.Span-30)<.01 ? 1 : Math.Abs(_timeline.Span-120)<.01 ? 2 : 3;
         _rebuilding=true; _windowRange.SelectedIndex=preset; _rebuilding=false;
-        ToolTip.SetTip(_live, _timeline.Live ? "点击暂停画面跟随；采集与记录继续" : "回到最新事件，保留当前时间范围；快捷键 L");
+        ToolTip.SetTip(_live, _session?.IsReplay==true ? "自动推进时间轴，不播放声音" : _timeline.Live ? "暂停画面跟随，采集和记录继续" : "回到最新事件，保留时间范围；快捷键 L");
+        _live.Background=_timeline.Live?_p.AccentSurface:Brushes.Transparent;
         _live.BorderBrush=_timeline.Live?_p.Good:_p.Border;
         UpdateRange(); _timeline.InvalidateVisual();
     }
@@ -818,8 +827,7 @@ public sealed partial class MainWindow : Window
             name=_snapshot.FirstOrDefault(x=>x.session==e.session&&x.kind=="request"&&x.entity=="cue"&&x.objectId==playbackId)?.name??"";
         if(string.IsNullOrWhiteSpace(name))name="名称未记录";
         if(_inspectorKind.Text!=name)_inspectorKind.Text=name;
-        _inspectorKind.Foreground=ControlPresentation.Kinds.Contains(e.kind)?_p.Control(e.kind)
-            :e.kind=="request"?_p.Request:e.kind is "play" or "stop" or "stop-request"?_p.Semantic(VisualLanguage.EventColor(e)):_p.Text;
+        _inspectorKind.Foreground=_p.Text;
         ToolTip.SetTip(_inspectorKind,name);
         if(_inspectorName.Text!=kind)_inspectorName.Text=kind;
         if(e.kind=="request" && e.entity=="cue" && e.detail.StartsWith("CRI Cue 播放实例",StringComparison.Ordinal))
@@ -834,8 +842,8 @@ public sealed partial class MainWindow : Window
     {
         if (_selected is not { } e)
         {
-            details.Children.Add(Label("选择一个事件", 21));
-            var introduction=new TextBlock {Text="点击时间轴或事件日志中的记录，查看时间、状态与关联对象。",TextWrapping=TextWrapping.Wrap,Foreground=_p.Muted,FontSize=12,LineHeight=22};
+            details.Children.Add(Label("查看声音详情", 18));
+            var introduction=new TextBlock {Text="选择一条声音或事件，查看它的状态、时间与关联信息。",TextWrapping=TextWrapping.Wrap,Foreground=_p.Muted,FontSize=12,LineHeight=22};
             ToolTip.SetTip(introduction,"观测只呈现已收到的证据：Cue 请求与 Voice 分开；热接入不补造历史；缺失数据标为未提供；SDK 补充使用独立时钟。");
             details.Children.Add(introduction);
             return;
@@ -845,11 +853,11 @@ public sealed partial class MainWindow : Window
             var row=new Grid {Tag="row:"+label, ColumnDefinitions=new ColumnDefinitions(UiMetrics.InspectorColumns), ColumnSpacing=UiMetrics.InspectorFieldGap, MinHeight=UiMetrics.InspectorRowHeight, Margin=new Thickness(0)};
             var title=Label(label,UiMetrics.CaptionSize,_p.Muted);title.VerticalAlignment=VerticalAlignment.Top;title.Margin=new Thickness(0,2,0,0);row.Children.Add(title);
             if(label=="开始播放" && value!="尚未分配 Voice")title.Foreground=_p.Semantic(SemanticColor.Started);
-            if(label is "结束播放" or "请求停止")title.Foreground=_p.Semantic(SemanticColor.Ended);
-            if(label=="已播放" || label=="状态" && value.Contains("播放中",StringComparison.Ordinal))title.Foreground=_p.Request;
+            if(label is "结束播放" or "请求停止")title.Foreground=_p.Muted;
+            if(label=="状态" && value.Contains("播放中",StringComparison.Ordinal))title.Foreground=_p.Good;
             var text=new SelectableTextBlock {Tag="field:"+label,Text=string.IsNullOrEmpty(value)?"未提供":value,Foreground=_p.Text,FontSize=UiMetrics.BodySize,TextWrapping=TextWrapping.Wrap,VerticalAlignment=VerticalAlignment.Top};
             if(label=="开始播放" && value=="开始发生在记录之前")text.Foreground=_p.Semantic(SemanticColor.Started);
-            if(label=="已播放" || label=="状态" && value.Contains("播放中",StringComparison.Ordinal))text.Foreground=_p.Request;
+            if(label=="状态" && value.Contains("播放中",StringComparison.Ordinal))text.Foreground=_p.Good;
             Grid.SetColumn(text,1);row.Children.Add(text);details.Children.Add(row);
         }
         var eventSession=_collector.Sessions.FirstOrDefault(s=>s.Id==e.session)??_session;

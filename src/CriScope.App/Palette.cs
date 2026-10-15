@@ -11,25 +11,26 @@ internal sealed class Palette(bool light)
     private static readonly string[] LightCategoryColors=["#B35D44", "#477C99", "#8C678F", "#5E8357", "#AD7D33", "#538282", "#A55B72", "#6B76A2", "#877747", "#63866C", "#A06257", "#6C7E9A"];
     private static readonly string[] DarkCategoryColors=["#E6A18B", "#83BEDB", "#C0A2CE", "#9EC58B", "#E0BB73", "#8DCBC9", "#DCA0B6", "#A4B0DA", "#C9BF82", "#A2C9AE", "#D7A69B", "#A6BDDE"];
     public bool Light { get; } = light;
-    public IBrush Shell => B(Light ? "#E8E3D9" : "#0A0D10");
-    public IBrush Panel => B(Light ? "#F1EEE7" : "#11161C");
-    public IBrush Canvas => B(Light ? "#FBFAF6" : "#0C1015");
-    public IBrush Alternate => B(Light ? "#F5F2EB" : "#10161D");
-    public IBrush Border => B(Light ? "#D6D2CA" : "#29313B");
-    public IBrush TimelineGrid => B(Light ? "#E9E6DF" : "#1A222B");
-    public IBrush Text => B(Light ? "#282D34" : "#E0E5EA");
-    public IBrush Muted => B(Light ? "#69717A" : "#909CA9");
-    public IBrush Signal => B(Light ? "#985716" : "#D8A56D");
-    public IBrush Selection => B(Light ? "#7255A0" : "#AD96D6");
-    public IBrush Error => B(Light ? "#B73C45" : "#EC8790");
-    public IBrush Good => B(Light ? "#357B69" : "#83BDA8");
+    public IBrush Shell => B(Light ? "#ECEDE8" : "#181E21");
+    public IBrush Panel => B(Light ? "#F3F4EF" : "#1D2427");
+    public IBrush Canvas => B(Light ? "#FCFCF9" : "#151B1E");
+    public IBrush Alternate => B(Light ? "#F5F6F1" : "#1A2225");
+    public IBrush Border => B(Light ? "#DCE0D8" : "#333E40");
+    public IBrush TimelineGrid => B(Light ? "#E8EBE4" : "#252F32");
+    public IBrush Text => B(Light ? "#293630" : "#E2E9E5");
+    public IBrush Muted => B(Light ? "#66756D" : "#A1B0A9");
+    public IBrush Signal => B(Light ? "#8B642E" : "#CEAC79");
+    public IBrush Selection => B(Light ? "#34786B" : "#95C4B5");
+    public IBrush Error => B(Light ? "#B04448" : "#E99498");
+    public IBrush Good => B(Light ? "#31745E" : "#8AC2A8");
     public IBrush Voice => B(Light ? "#267E85" : "#74CBC2");
     public IBrush Request => B(Light ? "#A36D20" : "#E6BA78");
     public IBrush Listener => B(Light ? "#386FB5" : "#88B5F6");
-    public IBrush Hover => B(Light ? "#E6E0D5" : "#25303D");
-    public IBrush WorkspaceActive => B(Light ? "#E2DDD3" : "#26323F");
-    public IBrush WorkspaceActiveBorder => B(Light ? "#B1AAA0" : "#536374");
-    public IBrush WorkspaceHover => B(Light ? "#F3EFE7" : "#18222D");
+    public IBrush Hover => B(Light ? "#E8EDE5" : "#2A3839");
+    public IBrush WorkspaceActive => B(Light ? "#E8EDE5" : "#2A3839");
+    public IBrush WorkspaceActiveBorder => B(Light ? "#34786B" : "#95C4B5");
+    public IBrush WorkspaceHover => B(Light ? "#F0F3EC" : "#232D30");
+    public IBrush AccentSurface => B(Light ? "#E7EEE7" : "#263B36");
     public IBrush Control(string kind) => ControlPresentation.Type(kind) switch
     {
         ControlKind.Aisac => B(Light ? "#7550AF" : "#BDA2E8"),
@@ -39,7 +40,7 @@ internal sealed class Palette(bool light)
         ControlKind.Sequence => B(Light ? "#3B6FAF" : "#8FB9F0"), _ => Muted
     };
     public IBrush Semantic(SemanticColor color)=>color switch {
-        SemanticColor.Selected=>Selection,SemanticColor.Started=>Good,SemanticColor.Ended=>Error,
+        SemanticColor.Selected=>Selection,SemanticColor.Started=>Good,SemanticColor.Ended=>Muted,
         SemanticColor.Warning=>Signal,SemanticColor.Source=>Voice,SemanticColor.Listener=>Listener,
         SemanticColor.Aisac=>Control("aisac"),SemanticColor.Selector=>Control("selector"),
         SemanticColor.Block=>Control("block"),SemanticColor.Beat=>Control("beat"),

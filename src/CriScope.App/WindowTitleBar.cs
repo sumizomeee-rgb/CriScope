@@ -16,9 +16,9 @@ internal sealed class WindowTitleBar : Border
         var layout = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
         var brand = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 9, Margin = new Thickness(14, 0), VerticalAlignment = VerticalAlignment.Center };
         brand.Children.Add(new Avalonia.Controls.Shapes.Path { Data = Geometry.Parse("M2,10 V18 M8,3 V25 M14,6 V22 M20,12 V16"), Stroke = palette.Voice, StrokeThickness = 2.5, Width = 18, Height = 23, Stretch = Stretch.Uniform });
-        brand.Children.Add(new TextBlock { Text = "CriScope", FontSize = 13, Foreground = palette.Text, VerticalAlignment = VerticalAlignment.Center });
+        brand.Children.Add(new TextBlock { Text = "CriScope", FontSize = 14, FontWeight=FontWeight.SemiBold, Foreground = palette.Text, VerticalAlignment = VerticalAlignment.Center });
         layout.Children.Add(brand);
-        var title = new TextBlock { Text = "音频诊断工作台", FontSize = 11, Foreground = palette.Muted, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(14, 0) };
+        var title = new TextBlock { Text = "音频观测", FontSize = 11, Foreground = palette.Muted, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(14, 0) };
         Grid.SetColumn(title, 1); layout.Children.Add(title);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal };
         buttons.Children.Add(Caption("最小化", "M4,11 H20 V12 H4 Z", () => owner.WindowState = WindowState.Minimized));

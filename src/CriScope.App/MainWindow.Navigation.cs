@@ -55,8 +55,7 @@ public sealed partial class MainWindow
             Padding=new Thickness(8,0),Background=Brushes.Transparent,Foreground=_p.Text,BorderThickness=new Thickness(0),
             HorizontalAlignment=HorizontalAlignment.Left,VerticalContentAlignment=VerticalAlignment.Center};
         ToolTip.SetTip(button,caption+(relatedName.Length>0?" · "+relatedName:""));
-        button.PointerEntered+=(_,_)=>button.Background=_p.Hover;
-        button.PointerExited+=(_,_)=>button.Background=Brushes.Transparent;
+        RefineButton(button);
         button.Click+=(_,_)=>action();return button;
     }
     private void AddAssociations(StackPanel details, WireEvent selected, PlaybackGroup? playback)
@@ -96,7 +95,7 @@ public sealed partial class MainWindow
                 Link(sources.Length == 1 ? "" : $"音源 · X {source.x:0.#} / Z {source.z:0.#}", "Location", source);
             if(owners.Length>0 && sources.Length==0)
             {
-                var unavailable=Label("空间关联未提供",11,_p.Muted);
+                var unavailable=Label("未记录关联音源",11,_p.Muted);
                 ToolTip.SetTip(unavailable,"当前时刻没有明确的 3D Source 关联；不据此判定为 2D 音效。"); links.Children.Add(unavailable);
             }
         }

@@ -208,7 +208,7 @@ public sealed class TimelineControl : Control
         return _controlRows;
     }
     private const double LabelWidth = UiMetrics.TimelineLabelWidth;
-    private const double PlaybackRowHeight = 44;
+    private const double PlaybackRowHeight = 48;
     private const double VoiceRowHeight = 28;
     private double PlotWidth => Math.Max(40, Bounds.Width-LabelWidth-22);
     private double MixingViewportHeight => Math.Max(1,Bounds.Height-106);
@@ -439,7 +439,7 @@ public sealed class TimelineControl : Control
     public override void Render(DrawingContext c)
     {
         base.Render(c);c.FillRectangle(Palette.Canvas,new Rect(Bounds.Size));_links.Clear();_hits.Clear();_playbackTips.Clear();_relatedCueBounds.Clear();_expandHits.Clear();_toggleHits.Clear();_spatialHits.Clear();_spatialListHits.Clear();_trackRows.Clear();_majorGridXs.Clear();SpatialOverlayBounds=default;SpatialOverlayMaxScroll=0;_spatialExpandedKey=null;
-        if(Events.Length==0&&SupplementMetrics.Length==0){Empty(c,"等待音频观测","在游戏里开启 CriScope 采集，或打开已有日志。");return;}
+        if(Events.Length==0&&SupplementMetrics.Length==0){Empty(c,"等待声音到来","在游戏音频调试中开启 CriScope 采集，或从右上角打开记录。");return;}
         if(Mode=="Location"){DrawLocations(c);return;}if(Mode=="Mixing"){DrawMixing(c);DrawScrollHint(c);return;}
         var axisStart=Math.Max(TimeOrigin,Start);
         var clockAtStart=ShowingWallTime?ClockTimeAt?.Invoke(axisStart):null;
@@ -486,7 +486,7 @@ public sealed class TimelineControl : Control
         c.DrawLine(new Pen(Palette.TimelineGrid,Mode=="Timeline"?.5:.6),new Point(x,34),new Point(x,Bounds.Height-28));
         c.DrawLine(new Pen(Palette.Muted,.8),new Point(x,28),new Point(x,34));
         using(c.PushClip(new Rect(LabelWidth,0,Math.Max(0,Bounds.Width-LabelWidth),34)))
-            Text(c,label,x+4,10,size:10);
+            Text(c,label,x+4,9,size:11);
     }
     private void DrawMinorRulerMarks(DrawingContext c,double first,double last,double step,Func<double,double> map)
     {
@@ -528,14 +528,14 @@ public sealed class TimelineControl : Control
             using(c.PushTransform(Matrix.CreateTranslation(15,y+18)))
                 c.DrawGeometry(null,new Pen(Palette.Muted,1.2),expanded?ExpandedChevron:CollapsedChevron);
             using(c.PushClip(new Rect(29,y+2,LabelWidth-39,20)))
-                Text(c,Elide(group.Name,LabelWidth-42,12),30,y+4,Palette.Text,12);
+                Text(c,Elide(group.Name,LabelWidth-42,13),30,y+5,Palette.Text,13);
             var status=!SourceConnected&&group.ActiveVoiceCount>0?"已断开 · 保留最后状态":group.StatusLabel;
             var duration=group.DurationAt(End);
             var durationText=duration is {} seconds?seconds.ToString("0.000",CultureInfo.InvariantCulture)+" 秒":"";
             var categoryText=string.Join(" / ",categories.Select(e=>e.name));
             var summary=string.Join(" · ",new[]{status,durationText}.Where(text=>text.Length>0));
             using(c.PushClip(new Rect(29,y+20,LabelWidth-39,20)))
-                Text(c,Elide(summary,LabelWidth-40,10),30,y+25,group.ActiveVoiceCount>0&&SourceConnected?Palette.Request:Palette.Muted,10);
+                Text(c,Elide(summary,LabelWidth-40,11),30,y+26,Palette.Muted,11);
             string FullStamp(double time)=>ClockTimeAt?.Invoke(time) is { } wall
                 ? wall.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.fff",CultureInfo.InvariantCulture):Stamp(time);
             var endedLabel=group.EndedAt??group.InstanceEndedAt;
@@ -618,7 +618,7 @@ public sealed class TimelineControl : Control
     {
         var rect=new Rect(1,y+1,Math.Max(0,Bounds.Width-23),height-2);
         _trackRows.Add(rect);
-        if(selected)c.FillRectangle(Palette.Hover,rect);
+        if(selected){c.FillRectangle(Palette.AccentSurface,rect);c.FillRectangle(Palette.Selection,new Rect(0,y+1,2,height-2));}
         else if(_hoverTrackRect==rect)c.FillRectangle(Palette.WorkspaceHover,rect);
         else if(row%2==0)c.FillRectangle(Palette.Alternate,new Rect(0,y,Math.Max(0,Bounds.Width-22),height));
         foreach(var x in _majorGridXs)
@@ -640,7 +640,7 @@ public sealed class TimelineControl : Control
         {
             using(c.PushOpacity(voice?.55:selected?.9:Palette.Light?.74:.72))
                 c.DrawRectangle(brush,null,rect,voice?1:2,voice?1:2);
-            if(selected)c.DrawRectangle(null,new Pen(Palette.Text,1),rect,voice?1:2,voice?1:2);
+            if(selected)c.DrawRectangle(null,new Pen(brush,1),rect,voice?1:2,voice?1:2);
 
             if(range.UnknownStart)
             {
