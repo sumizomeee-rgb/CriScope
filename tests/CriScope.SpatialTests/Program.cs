@@ -51,10 +51,22 @@ var freed=Map("SoundVoice_FreeVoice",20,V("CriAtomSoundVoiceId_unique64",11UL),V
 Check(freed.Single(e=>e.entity=="source").name=="Cue B","Freed Voice left stale source Cue association");
 var last=Map("SoundVoice_FreeVoice",21,V("CriAtomSoundVoiceId_unique64",12UL),V("ExPlaybackId_unique64",2UL));
 Check(last.Single(e=>e.entity=="source").name.Contains("未观测到播放关联"),"Unassigned source name pretends known Cue");
+using(var raw=JsonDocument.Parse(last.Single(e=>e.entity=="source").raw))
+{
+    var recent=raw.RootElement.GetProperty("derived").GetProperty("lastPlayback");
+    Check(recent.GetProperty("cue").GetString()=="Cue B"&&recent.GetProperty("observedAt").GetDouble()==.000019,
+        "Last observed Cue and original voice observation time lost after stop");
+    Check(raw.RootElement.GetProperty("derived").GetProperty("links").GetArrayLength()==0,
+        "Historical last Cue became an active source link");
+}
 Check(Map("Ex3dSource_Destroy",22,V("CriAtomEx3dSourceHn","0x100")).Single().kind=="remove","Source destroy not observable");
 Map("Ex3dSource_SetPosition",23,V("CriAtomEx3dSourceHn","pending"),V("3dPosVector_Position",new float[]{3,1,5}));
 Map("Ex3dSource_ResetParameters",24,V("CriAtomEx3dSourceHn","pending"));
 Check(Map("Ex3dSource_Update",25,V("CriAtomEx3dSourceHn","pending"),V("3dPosVector_Position",new float[]{9,9,9})).All(e=>e.kind!="position"),"Reset retained pending setter or invented post-update snapshot");
+Map("Ex3dSource_SetPosition",25,V("CriAtomEx3dSourceHn","0x100"),V("3dPosVector_Position",new float[]{1,2,3}));
+using(var reused=JsonDocument.Parse(Map("Ex3dSource_Update",25,V("CriAtomEx3dSourceHn","0x100")).Single(e=>e.kind=="position").raw))
+    Check(reused.RootElement.GetProperty("derived").GetProperty("lastPlayback").ValueKind==JsonValueKind.Null,
+        "Reused source handle inherited a destroyed object's last Cue");
 Map("Ex3dSource_SetPosition",26,V("CriAtomEx3dSourceHn","history"),V("3dPosVector_Position",new float[]{3,1,5}));
 var history=Map("Ex3dSource_Update",27,V("CriAtomEx3dSourceHn","history"),V("3dPosVector_Position",new float[]{0,0,0})).Single(e=>e.kind=="position");
 Map("Ex3dSource_SetPosition",28,V("CriAtomEx3dSourceHn","history"),V("3dPosVector_Position",new float[]{11,7,-13}));

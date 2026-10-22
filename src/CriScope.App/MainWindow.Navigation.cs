@@ -38,6 +38,7 @@ public sealed partial class MainWindow
         }
         // Spatial state must be evaluated at the selected callback/log event, never at future samples.
         if((mode == "Location" || eventContext && !atEvent) && time != _timeline.End) { _timeline.Live = false; _timeline.End = time; }
+        if(mode == "Location"){_timeline.SpatialHistory=null;_timeline.FitSpatial();}
         if(mode == "AISAC") _timeline.ControlKinds.Add(item.kind);
         _filterException = item;
         UpdateEvents();

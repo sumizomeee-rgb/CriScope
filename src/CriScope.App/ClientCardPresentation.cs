@@ -43,5 +43,14 @@ public static class ClientCardPresentation
         if(System.Net.IPEndPoint.TryParse(endpoint,out var address))return address.Address.ToString();
         return string.IsNullOrWhiteSpace(endpoint)?"IP 未提供":endpoint;
     }
-    public static string Status(Session[] sessions) => sessions.All(s => s.IsReplay) ? "日志" : sessions.Any(s => s.Recording) ? "记录中" : sessions.Any(s => s.Connected) ? "在线" : "已断开";
+    public static Session? UnavailableNative(Session[] sessions)
+    {
+        if (sessions.Length == 0 || !sessions.Any(s => s.Connected && !s.IsReplay)) return null;
+        var preferred = Default(sessions);
+        var native = sessions.Where(s => !s.IsReplay && s.CaptureId == preferred.CaptureId && Channel(s) == "native").ToArray();
+        return native.Any(s => s.Connected) ? null : native.LastOrDefault();
+    }
+    public static string ConnectionDetails(Session[] sessions) => string.Join("\n", sessions.Select(s =>
+        $"{(Channel(s) == "native" ? "原生" : "SDK")}：{s.ConnectionStatus}"));
+    public static string Status(Session[] sessions) => sessions.All(s => s.IsReplay) ? "日志" : UnavailableNative(sessions) != null ? "原生未就绪" : sessions.Any(s => s.Recording) ? "记录中" : sessions.Any(s => s.Connected) ? "在线" : "已断开";
 }

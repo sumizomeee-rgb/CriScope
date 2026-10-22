@@ -91,6 +91,8 @@ public sealed partial class MainWindow : Window
         public WireEvent? FilterException;
         public double Vertical;
         public string[] Expanded=[];
+        public SpatialViewport SpatialView = new();
+        public HistoricalSpatialScene? SpatialHistory;
         public bool Inspector;
         public double End = 30, Span = 30;
         public bool Live = true;
@@ -292,20 +294,36 @@ public sealed partial class MainWindow : Window
         Grid.SetColumn(drawers,1); workspaceBar.Children.Add(drawers);
         main.Children.Add(Surface(workspaceBar, _p.Canvas));
         var toolbar = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto,Auto"), Margin = new Thickness(UiMetrics.PanelInset, 8) };
-        _filter = new TextBox { PlaceholderText = "搜索声音、对象或参数", FontSize = 13, Background = _p.Alternate, BorderBrush = _p.Border, BorderThickness=new Thickness(1), CornerRadius=new CornerRadius(5), MinHeight=34, MinWidth = 120 };
+        _filter = new TextBox { PlaceholderText = _mode=="Location" ? "搜索音源（保留监听点）" : "搜索声音、对象或参数", FontSize = 13, Background = _p.Alternate, BorderBrush = _p.Border, BorderThickness=new Thickness(1), CornerRadius=new CornerRadius(5), MinHeight=34, MinWidth = 120 };
         _filter.TextChanged += (_, _) => { if (!_rebuilding) { _filterException=null; UpdateEvents(); } };
         _categoryChip=Action("清除筛选",()=>{_categoryId="";_categoryName="";_filterException=null;UpdateEvents();});
         _categoryChip.MaxWidth=150;_categoryChip.Padding=new Thickness(8,4);_categoryChip.Margin=new Thickness(0,0,8,0);
         _categoryChip.IsVisible=_categoryId.Length>0;toolbar.Children.Add(_categoryChip);
         Grid.SetColumn(_filter,1); toolbar.Children.Add(_filter);
+        if(_mode=="Mixing")
+        {
+            _filter.IsVisible=false;
+            var busScope=Label("全局 Bus · 不受声音筛选影响",13,_p.Muted);
+            busScope.VerticalAlignment=VerticalAlignment.Center;
+            Grid.SetColumn(busScope,1);toolbar.Children.Add(busScope);
+        }
         _live = Action("跟随最新", ToggleView); _live.Margin = new Thickness(8, 0, 0, 0);
         Grid.SetColumn(_live, 2); toolbar.Children.Add(_live);
         _windowRange = new ComboBox { ItemsSource = new[] { "最近 10 秒", "最近 30 秒", "最近 2 分钟", "自定义范围" }, SelectedIndex = 1, MinWidth = 118, FontSize = 12, Background=_p.Canvas, BorderBrush=_p.Border, CornerRadius=new CornerRadius(5), MinHeight=34, Margin = new Thickness(8,0,0,0) };
         _windowRange.SelectionChanged += (_,_) => { if (_rebuilding || _timeline == null || _windowRange.SelectedIndex > 2) return; _timeline.Span = new[] {10d,30d,120d}[_windowRange.SelectedIndex]; Refresh(); };
         Grid.SetColumn(_windowRange, 3); toolbar.Children.Add(_windowRange);
         var fit = IconAction("全览",IconKind.Fit, ()=>ApplyUiAction("fit",null)); fit.Margin = new Thickness(8, 0, 0, 0); Grid.SetColumn(fit, 4); toolbar.Children.Add(fit);
-        if(_mode is "Location" or "Mixing"){fit.IsVisible=false;_windowRange.IsVisible=false;}
-        ToolTip.SetTip(fit, "一次性缩放到当前保留的事件范围，并暂停跟随；不停止采集");
+        if(_mode=="Location")
+        {
+            toolbar.Children.Remove(fit);
+            var spatialActions=new StackPanel {Orientation=Orientation.Horizontal,Spacing=4};
+            spatialActions.Children.Add(fit);
+            spatialActions.Children.Add(IconAction("定位监听器（C）",IconKind.Listener,()=>_timeline.FocusListeners()));
+            Grid.SetColumn(spatialActions,4);toolbar.Children.Add(spatialActions);
+        }
+        if(_mode is "Location" or "Mixing")_windowRange.IsVisible=false;
+        if(_mode=="Mixing")fit.IsVisible=false;
+        ToolTip.SetTip(fit, _mode=="Location" ? "空间全览（F）：自动容纳全部已显示点，不改变历史时刻" : "一次性缩放到当前保留的事件范围，并暂停跟随；不停止采集");
         Grid.SetRow(toolbar, 1); main.Children.Add(toolbar);
         if(_mode=="Logs"){toolbar.IsVisible=false;main.RowDefinitions[1].Height=new GridLength(0);}
         _timeline = new TimelineControl { Palette = _p, Mode = _mode, TimeOrigin = _session?.TimeOrigin ?? 0, PreferWallTime = _preferWallTimeAxis };
@@ -407,13 +425,13 @@ public sealed partial class MainWindow : Window
     {
         if (_session == null) return;
         _views[_session] = new ViewState { Filter = _filter.Text ?? "", End = _timeline.End, Span = _timeline.Span, Live = _timeline.Live, Selected = _selected, SelectionStart = _timeline.SelectionStart, SelectionEnd = _timeline.SelectionEnd,
-            SpatialFocus=_timeline.SpatialFocusId, CategoryId=_categoryId, CategoryName=_categoryName, FilterException=_filterException, Vertical=_timeline.VerticalOffset, Expanded=_timeline.ExpandedKeys, Inspector=_showInspector,
+            SpatialFocus=_timeline.SpatialFocusId, SpatialView=_timeline.SpatialView.Clone(), SpatialHistory=_timeline.SpatialHistory, CategoryId=_categoryId, CategoryName=_categoryName, FilterException=_filterException, Vertical=_timeline.VerticalOffset, Expanded=_timeline.ExpandedKeys, Inspector=_showInspector,
             ControlKinds=_timeline.ControlKinds.ToArray(), ShowSources=_timeline.ShowSources, ShowListeners=_timeline.ShowDistanceListeners, ShowBase=_timeline.ShowBaseListeners };
     }
     private void RestoreView()
     {
         if (_session == null || !_views.TryGetValue(_session, out var v)) return;
-        _timeline.SpatialFocusId=v.SpatialFocus; _filter.Text = v.Filter; _categoryId=v.CategoryId; _categoryName=v.CategoryName; _filterException=v.FilterException; _timeline.VerticalOffset=v.Vertical; _timeline.ExpandedKeys=v.Expanded; _showInspector=v.Inspector; _timeline.End = v.End; _timeline.Span = v.Span; _timeline.Live = v.Live; _selected = v.Selected; _timeline.Selected = v.Selected;
+        _timeline.SpatialFocusId=v.SpatialFocus; _timeline.SpatialView=v.SpatialView.Clone(); _timeline.SpatialHistory=v.SpatialHistory; _filter.Text = v.Filter; _categoryId=v.CategoryId; _categoryName=v.CategoryName; _filterException=v.FilterException; _timeline.VerticalOffset=v.Vertical; _timeline.ExpandedKeys=v.Expanded; _showInspector=v.Inspector; _timeline.End = v.End; _timeline.Span = v.Span; _timeline.Live = v.Live; _selected = v.Selected; _timeline.Selected = v.Selected;
         _timeline.SetSelection(v.SelectionStart, v.SelectionEnd);
         _timeline.ControlKinds.Clear(); foreach (var kind in v.ControlKinds) _timeline.ControlKinds.Add(kind);
         _timeline.ShowSources=v.ShowSources; _timeline.ShowDistanceListeners=v.ShowListeners; _timeline.ShowBaseListeners=v.ShowBase;
@@ -494,6 +512,7 @@ public sealed partial class MainWindow : Window
             recording = _session != null && RecordingTargets(_session).Any(s => s.Recording), connected = _session?.Connected ?? false,
             inspector = _showInspector, diagnostics = _diagnostics, width = Bounds.Width, height = Bounds.Height, dpi = 96 * RenderScaling,
             category = _categoryName, navigationDepth = _navigation.Count, logQuery = _logQuery, logFollowing = _logFollowing,
+            playbackNotice = _session != null && _timeline.PlaybackEmptyVisible ? _timeline.PlaybackEmptyTitle : null,
             panels = new[] { "window", "workspace", "sessions", "inspector", "diagnostics" } };
     }
     public void ApplyUiAction(string action, string? value)
@@ -505,7 +524,8 @@ public sealed partial class MainWindow : Window
                 _mode = (value ?? "").ToLowerInvariant() switch { "播放" or "声音时间线" or "playback" or "timeline" => "Timeline", "控制" or "control" or "aisac" => "AISAC", "混音" or "mixing" => "Mixing", "空间" or "space" or "location" => "Location", "资源" or "resources" or "performance" => "Performance", "logs" or "日志" => "Logs", _ => throw new ArgumentException("未知工作区") };
                 SaveView(); Build(); RestoreView(); break;
             case "live": if (!string.Equals(value, "false", StringComparison.OrdinalIgnoreCase) && value != "0") ReturnLive(); else _timeline.Live=false; break;
-            case "fit": if(_mode=="Location"){_timeline.SpatialFocusId="";_timeline.InvalidateVisual();}else Fit(); break;
+            case "fit": if(_mode=="Location")_timeline.FitSpatial();else Fit(); break;
+            case "spatial-focus-listeners": _timeline.FocusListeners(); break;
             case "control-kind":
                 var kindParts=(value??"").Split(':'); if(kindParts.Length!=2)throw new ArgumentException("control-kind 格式 aisac:true");
                 _timeline.SetControlKind(kindParts[0],bool.Parse(kindParts[1])); break;
@@ -578,10 +598,11 @@ public sealed partial class MainWindow : Window
         _timeline.InvalidateVisual(); UpdateRange();
     }
     private void ReturnLive()
-    { _timeline.Live = true; _lastTotal = -1; }
+    { if(_timeline.SpatialHistory!=null){_timeline.SpatialHistory=null;_timeline.FitSpatial();} _timeline.Live = true; _lastTotal = -1; }
     private void ToggleView()
     {
         if (_session is null) return;
+        if(_timeline.SpatialHistory!=null){ReturnLive();Refresh();return;}
         if (_session.IsReplay)
         {
             _playing = !_playing;
@@ -627,7 +648,7 @@ public sealed partial class MainWindow : Window
             if(primary!=null) { var filter=_filter.Text; SelectSession(primary); _filter.Text=filter; return; }
         }
         if (_session == null && sessions.Length > 0 && ClientCardPresentation.Group(sessions).Length == 1) { SelectSession(ClientCardPresentation.Default(sessions)); return; }
-        var signature = string.Join("|", sessions.Select(s => $"{s.Id}/{s.IsReplay}/{s.Connected}/{s.Capturing}/{s.Recording}/{s.Name}/{s.Platform}/{s.Endpoint}/{s.Pid}")) + _session?.GetHashCode();
+        var signature = string.Join("|", sessions.Select(s => $"{s.Id}/{s.IsReplay}/{s.Connected}/{s.Capturing}/{s.Recording}/{s.Name}/{s.Platform}/{s.Endpoint}/{s.Pid}/{s.ConnectionStatus}")) + _session?.GetHashCode();
         if (signature != _sessionSignature)
         {
             _sessionSignature = signature; _sessions.Children.Clear();
@@ -671,7 +692,7 @@ public sealed partial class MainWindow : Window
                 heading.BorderThickness=selected?new Thickness(3,0,0,0):new Thickness(0);heading.Background=selected?_p.AccentSurface:Brushes.Transparent;
                 heading.Tag=selected?"selected-client":"client";
                 heading.PointerExited+=(_,_)=>heading.Background=selected?_p.AccentSurface:Brushes.Transparent;
-                ToolTip.SetTip(heading, $"{preferred.Name}\n{preferred.Machine} · {preferred.Platform}\nPID {preferred.Pid}");
+                ToolTip.SetTip(heading, $"{preferred.Name}\n{preferred.Machine} · {preferred.Platform}\nPID {preferred.Pid}\n{ClientCardPresentation.ConnectionDetails(group.Where(channel=>channel.CaptureId==preferred.CaptureId).ToArray())}");
                 card.Children.Add(heading);
                 _sessions.Children.Add(card);
             }
@@ -684,24 +705,27 @@ public sealed partial class MainWindow : Window
             var replay = s.IsReplay;
             var recordingTargets = RecordingTargets(s);
             var recordingCount = recordingTargets.Count(target => target.Recording);
+            var unavailableNative = ClientCardPresentation.UnavailableNative(recordingTargets);
+            var connectionDetails = ClientCardPresentation.ConnectionDetails(recordingTargets.Length > 0 ? recordingTargets : [s]);
             var recordingErrors = recordingTargets.Where(target => !string.IsNullOrWhiteSpace(target.Error))
                 .Select(target => $"{(target.Channel == "native" ? "原生" : target.Channel == "sdk" ? "SDK" : "事件")}：{target.Error}").ToArray();
             var connection=replay?"历史记录":s.Connected?"已连接":"已断开";
             _states.Text=recordingErrors.Length>0?$"{connection} · 自动日志异常"
+                : unavailableNative!=null?"原生未就绪 · SDK 已连接"
                 : recordingCount>0?$"●  正在记录 · {recordingCount} 个通道":connection;
-            _states.Foreground=recordingErrors.Length>0?_p.Error:recordingCount>0?_p.Good:_p.Muted;
+            _states.Foreground=recordingErrors.Length>0?_p.Error:unavailableNative!=null?_p.Signal:recordingCount>0?_p.Good:_p.Muted;
             _states.TextTrimming = TextTrimming.CharacterEllipsis;
-            ToolTip.SetTip(_states, recordingErrors.Length>0?string.Join("\n",recordingErrors):_states.Text);
+            ToolTip.SetTip(_states, (recordingErrors.Length>0?string.Join("\n",recordingErrors):_states.Text)+"\n"+connectionDetails);
             var supplements = !string.IsNullOrEmpty(s.ClientId) && !string.IsNullOrEmpty(s.CaptureId) && !s.IsReplay && ClientCardPresentation.Channel(s)=="native"
                 ? sessions.Where(other=>other!=s && other.ClientId==s.ClientId && other.CaptureId==s.CaptureId && !other.IsReplay && ClientCardPresentation.Channel(other)=="sdk").ToArray() : [];
             var supplementTotal=supplements.Sum(other=>other.Total);
             if (_lastTotal != s.Total || _lastSupplementTotal != supplementTotal)
             {
                 _lastTotal=s.Total; _lastSupplementTotal=supplementTotal;
-                var previousCatalogSequence=_snapshot.Where(CueCatalogIndex.IsMetadata).Select(e=>Math.Abs(e.seq)).DefaultIfEmpty().Max();
+                var previousCatalogSequence=_snapshot.Where(e=>CueCatalogIndex.IsMetadata(e)||e.kind=="cue-info").Select(e=>Math.Abs(e.seq)).DefaultIfEmpty().Max();
                 var nativeEvents=s.ViewSnapshot();
                 _snapshot=ClientTimelineProjection.Combine(nativeEvents,supplements.SelectMany(other=>other.ViewSnapshot()).ToArray());
-                if(previousCatalogSequence!=_snapshot.Where(CueCatalogIndex.IsMetadata).Select(e=>Math.Abs(e.seq)).DefaultIfEmpty().Max())
+                if(previousCatalogSequence!=_snapshot.Where(e=>CueCatalogIndex.IsMetadata(e)||e.kind=="cue-info").Select(e=>Math.Abs(e.seq)).DefaultIfEmpty().Max())
                     _lastInspectorEnd=double.NaN;
                 _timeline.TimeOrigin=s.TimeOrigin;
                 _timeline.SourceConnected=s.Connected || s.IsReplay;
@@ -721,6 +745,17 @@ public sealed partial class MainWindow : Window
             var visibleEnd = _snapshot.Where(e => !CueCatalogIndex.IsMetadata(e))
                 .Select(e => e.time).DefaultIfEmpty(_timeline.End).Max();
             if (_timeline.Live && _snapshot.Length > 0) _timeline.End = visibleEnd;
+            var filteredPlayback = !string.IsNullOrWhiteSpace(_filter.Text) || _categoryId.Length > 0;
+            var nativeDiagnostic = _snapshot.LastOrDefault(e => e.source == "cri-native" && e.kind is "error" or "gap");
+            _timeline.PlaybackEmptyTitle = unavailableNative!=null ? "原生音频采集未就绪"
+                : filteredPlayback ? "当前筛选没有播放实例" : !_timeline.Live ? "当前范围没有播放实例"
+                : nativeDiagnostic!=null ? "收到数据，但尚无播放事件" : "尚未收到播放事件";
+            _timeline.PlaybackEmptyDescription = unavailableNative!=null
+                ? "当前仅接入 SDK 补充通道，播放轨道需要原生 CRI 数据。\n"+unavailableNative.ConnectionStatus
+                : filteredPlayback ? "清除上方筛选后查看全部播放实例。"
+                : !_timeline.Live ? "点击“返回实时”，或调整显示范围。"
+                : nativeDiagnostic!=null ? "请在“事件日志 → 异常与连接”查看诊断。\n"+nativeDiagnostic.name+"："+nativeDiagnostic.detail
+                : "内存、资源和原始协议消息不会直接生成播放轨道。\n在游戏中触发声音后，可在“事件日志 → 播放相关（全部）”查看播放事件。";
             if (_showInspector && _selected!=null && (double.IsNaN(_lastInspectorEnd) || Math.Abs(_timeline.End-_lastInspectorEnd)>.5)) { _lastInspectorEnd=_timeline.End; Inspector(); }
             if (s.IsReplay && _playing && _snapshot.Length > 0)
             {
@@ -729,12 +764,17 @@ public sealed partial class MainWindow : Window
             }
             var lost=recordingTargets.Length>0?recordingTargets.Sum(target=>target.Dropped):s.Dropped;
             var received=recordingTargets.Length>0?recordingTargets.Sum(target=>target.Total):s.Total;
-            _status.Text = _error ?? s.Error ?? $"{(s.IsReplay?"记录":"已接收")} {received:N0} 条"+(lost>0?$"  ·  缺失 {lost:N0} 条记录":"");
-            _status.Foreground = _error != null || s.Error != null ? _p.Error : lost>0?_p.Signal:_p.Muted;
-            ToolTip.SetTip(_status,s.ConnectionStatus+" · 内存缓存仅保留最近窗口；完整日志见底部文件夹入口");
+            var splitCounts = recordingTargets.Any(target=>ClientCardPresentation.Channel(target)=="native")
+                && recordingTargets.Any(target=>ClientCardPresentation.Channel(target)=="sdk");
+            var receiveText = splitCounts
+                ? $"原生 {recordingTargets.Where(target=>ClientCardPresentation.Channel(target)=="native").Sum(target=>target.Total):N0} 条 · SDK {recordingTargets.Where(target=>ClientCardPresentation.Channel(target)=="sdk").Sum(target=>target.Total):N0} 条"
+                : $"{(s.IsReplay?"记录":"已接收")} {received:N0} 条";
+            _status.Text = _error ?? s.Error ?? receiveText+(lost>0?$"  ·  缺失 {lost:N0} 条记录":"");
+            _status.Foreground = _error != null || s.Error != null ? _p.Error : unavailableNative!=null||lost>0?_p.Signal:_p.Muted;
+            ToolTip.SetTip(_status,connectionDetails+"\n内存缓存仅保留最近窗口；完整日志见底部文件夹入口");
         }
         else _status.Text = _error ?? _collector.Status;
-        _live.Content = ButtonContent(_session?.IsReplay == true ? _playing ? "暂停浏览" : "自动浏览" : _timeline.Live ? "暂停跟随" : "返回实时");
+        _live.Content = ButtonContent(_timeline.SpatialHistory!=null ? "返回实时" : _session?.IsReplay == true ? _playing ? "暂停浏览" : "自动浏览" : _timeline.Live ? "暂停跟随" : "返回实时");
         _live.IsEnabled = _session != null;
         var preset = Math.Abs(_timeline.Span-10)<.01 ? 0 : Math.Abs(_timeline.Span-30)<.01 ? 1 : Math.Abs(_timeline.Span-120)<.01 ? 2 : 3;
         _rebuilding=true; _windowRange.SelectedIndex=preset; _rebuilding=false;
@@ -752,7 +792,9 @@ public sealed partial class MainWindow : Window
     private void UpdateEvents()
     {
         if (_events == null) return;
-        var query = (_filter.Text ?? "").Trim();
+        // Bus meters describe the global mix, independently of Cue and category filters.
+        var globalBuses = _mode == "Mixing";
+        var query = globalBuses ? "" : (_filter.Text ?? "").Trim();
         var filtered = _snapshot.Where(e => query.Length == 0 || $"{e.kind} {e.name} {e.objectId} {e.detail}".Contains(query, StringComparison.OrdinalIgnoreCase)).ToArray();
         if (query.Length > 0)
         {
@@ -764,23 +806,29 @@ public sealed partial class MainWindow : Window
             var playbackIds=filtered.Concat(linkedRequests).Where(e=>e.entity=="cue").Select(e=>e.objectId).Concat(filtered.Where(e=>e.entity=="voice").Select(e=>e.parentId)).ToHashSet();
             filtered = _snapshot.Where(e => matched.Contains(e) || objects.Contains((e.source,e.entity,e.objectId)) || playbackIds.Contains(e.objectId) || playbackIds.Contains(e.parentId)).ToArray();
         }
-        if(_categoryId.Length>0)
+        if(!globalBuses&&_categoryId.Length>0)
         {
             var ids=_snapshot.Where(e=>e.kind=="category"&&e.objectId==_categoryId&&e.time<=_timeline.End).Select(e=>e.parentId).ToHashSet();
             filtered=filtered.Where(e=>ids.Contains(e.objectId)||ids.Contains(e.parentId)).ToArray();
         }
-        if(_filterException is {} target)
+        if(!globalBuses&&_filterException is {} target)
         {
             var id=target.entity=="voice"?target.parentId:target.objectId;
             filtered=filtered.Concat(_snapshot.Where(e=>e.objectId==id||e.parentId==id||e==target)).Distinct().ToArray();
         }
         if(_categoryChip!=null)
         {
-            _categoryChip.IsVisible=_categoryId.Length>0||_filterException!=null&&query.Length>0;
+            _categoryChip.IsVisible=!globalBuses&&(_categoryId.Length>0||_filterException!=null&&query.Length>0);
             _categoryChip.Content=CategoryChipContent(_categoryId.Length>0?_categoryName:"临时定位");
             ToolTip.SetTip(_categoryChip,_categoryId.Length>0
                 ? "Category: "+_categoryName+(_filterException!=null?" · 临时定位":"")+"\n点击清除筛选"
                 : "临时显示定位目标\n点击清除筛选");
+        }
+        if(_mode=="Location")
+        {
+            // Listener positions are global context; keep their removals and capture boundaries too.
+            var matched=filtered.ToHashSet();
+            filtered=_snapshot.Where(e=>matched.Contains(e)||e.entity is "listener" or "distance-listener" or "capture-segment"||e.kind=="gap").ToArray();
         }
         _timeline.AssociationEvents = _snapshot;
         _timeline.BusHistoryIsSparse = _session is { IsReplay: true, BusSamplesAreEventTriggered: true };
@@ -875,7 +923,8 @@ public sealed partial class MainWindow : Window
         var playbackId=e.entity=="cue"?e.objectId:e.parentId;
         var inspectedAt=eventContext?e.time:_timeline.End;
         var groups=PlaybackPresentation.Group(_snapshot,inspectedAt);
-        var playback=groups.FirstOrDefault(g=>g.Id==playbackId);
+        var playback=groups.FirstOrDefault(g=>g.Id==playbackId) ?? ArchivedSpatialPlayback(e);
+        if(_timeline.SpatialHistory?.PlaybackId==playbackId && ArchivedSpatialPlayback(e) is {} historicalPlayback)playback=historicalPlayback;
         var eventDetails=details;
         if(playback!=null && eventContext) {
             Field("所属声音",PlaybackLabel(playback));
@@ -900,7 +949,7 @@ public sealed partial class MainWindow : Window
                 foreach(var category in categories){var chip=InspectorValue(category.name,13);chip.Tag="category-info:"+category.objectId;chip.Margin=new Thickness(0,0,10,5);ToolTip.SetTip(chip,category.name);chips.Children.Add(chip);}
                 details.Children.Add(categoryRow);
             }
-            Field("状态", !_timeline.SourceConnected && playback.End==null ? "已断开 · 最后状态" : (eventContext || !_timeline.Live ? "该时刻 · " : "")+(playback.End!=null?"已结束":playback.StatusLabel));
+            Field("状态", _timeline.SpatialHistory!=null ? "历史空间 · "+(playback.End!=null?"已结束":playback.StatusLabel) : !_timeline.SourceConnected && playback.End==null ? "已断开 · 最后状态" : (eventContext || !_timeline.Live ? "该时刻 · " : "")+(playback.End!=null?"已结束":playback.StatusLabel));
 
             if(playback.RequestAt is {} playRequested)Field("请求播放",WallTime(playRequested,clockSession));
             Field("开始播放", playback.StartedAt is {} started?WallTime(started,clockSession):playback.UnknownStart?"开始发生在记录之前":"尚未分配 Voice");
@@ -921,6 +970,7 @@ public sealed partial class MainWindow : Window
                 if(cause?.Request is {} causeRequest) { var row=(Grid)details.Children.Last();row.ColumnDefinitions=new ColumnDefinitions(UiMetrics.InspectorActionColumns);var button=IconAction("定位触发此结束的播放实例",IconKind.Locate,()=>Navigate("Timeline",causeRequest,true));button.Width=28;button.Height=28;button.Tag="cause:"+cause.Id;Grid.SetColumn(button,2);row.Children.Add(button); }
             }
             AddAssociations(details,e,playback);
+            AddPlaybackSpatial(details,playback,configuredCue);
             var playerDetails=new StackPanel {Spacing=UiMetrics.Space1};
             var playerRow=new Grid {ColumnDefinitions=new ColumnDefinitions("*,Auto"),ColumnSpacing=UiMetrics.Space2,MinHeight=UiMetrics.IconTarget};
             playerRow.Children.Add(InspectorValue(_timeline.ControlLabels.Get("Player",JsonSerializer.Serialize(new[]{playback.Request?.session??"",playback.PlayerId}))+ $" · Voice {playback.Voices.Length} 个",UiMetrics.BodySize));
@@ -983,7 +1033,11 @@ public sealed partial class MainWindow : Window
             }
         }
         if (e.kind == "metric") Field("值", MetricPresentation.Value(e));
-        if (e.kind == "position") Field("坐标 X / Y / Z", $"{e.x:0.###} / {e.y:0.###} / {e.z:0.###}");
+        if (e.kind == "position")
+        {
+            Field("坐标 X / Y / Z", $"{e.x:0.###} / {e.y:0.###} / {e.z:0.###}");
+            if(e.entity=="source")AddSourceCueDetails(details,e,Field);
+        }
         if(playback==null && e.kind is not ("aisac" or "selector") &&
             !(e.kind=="request" && e.entity=="cue" && e.detail.StartsWith("CRI Cue 播放实例",StringComparison.Ordinal)))
             Field("详情", e.detail);

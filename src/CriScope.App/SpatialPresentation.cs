@@ -23,6 +23,44 @@ public static class SpatialPresentation
         return null;
     }
 
+    public static Point PlaceMarker(Point anchor, Rect area, IReadOnlyList<Rect> occupied, Vector? preferred = null)
+    {
+        var offsets=new List<Vector>();
+        if(preferred is {} prior)offsets.Add(prior);
+        offsets.Add(new());
+        foreach(var radius in new[]{28d,56d,84d})
+            foreach(var (x,y) in new[]{(1,0),(-1,0),(0,-1),(0,1),(1,-1),(-1,1),(1,1),(-1,-1)})
+                offsets.Add(new Vector(x*radius,y*radius));
+        foreach(var offset in offsets)
+        {
+            var point=anchor+offset;
+            var box=new Rect(point.X-11,point.Y-11,22,22);
+            if(area.Contains(box.TopLeft)&&area.Contains(box.BottomRight)&&!occupied.Any(r=>r.Inflate(2).Intersects(box)))return point;
+        }
+        return anchor;
+    }
+
+    public static Rect? PlaceCompactLabel(Point anchor, double width, Rect area, IReadOnlyList<Rect> occupied, Vector? preferred = null)
+    {
+        const double height=24;
+        bool Available(Rect rect)=>area.Contains(rect.TopLeft)&&area.Contains(rect.BottomRight)&&!occupied.Any(r=>r.Inflate(2).Intersects(rect));
+        if(preferred is {} offset)
+        {
+            var prior=new Rect(anchor+offset,new Size(width,height));
+            if(Available(prior))return prior;
+        }
+        foreach(var dy in new[]{-12d,12d,-36d,36d,-60d,60d})
+        foreach(var gap in new[]{16d,44d,72d,100d})
+        foreach(var right in new[]{true,false})
+        {
+            var left=right?anchor.X+gap:anchor.X-width-gap;
+            var candidate=new Rect(left,anchor.Y+dy,width,height);
+            if(candidate.Left<area.Left||candidate.Top<area.Top||candidate.Right>area.Right||candidate.Bottom>area.Bottom)continue;
+            if(!occupied.Any(rect=>rect.Inflate(2).Intersects(candidate)))return candidate;
+        }
+        return null;
+    }
+
     public static SpatialCluster[] Group(IEnumerable<WireEvent> events, double end, bool showBaseListeners = false, bool showSources = true, bool showDistanceListeners = true)
     {
         var available = events.Where(e => e.time <= end).ToArray();

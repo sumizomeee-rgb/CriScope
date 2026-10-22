@@ -24,6 +24,8 @@ public sealed class NativeEventMapper(string session)
     private readonly Dictionary<string, (string Value, double Time)> spatialState = new();
     private readonly Dictionary<string, Dictionary<string, (object Value, ulong Time)>> listeners = new();
     private readonly Dictionary<string, string> voiceSources = new();
+    private readonly Dictionary<string, double> playbackFirstVoice = new();
+    private readonly Dictionary<string, (string Playback, string Cue, double ObservedAt)> sourceLastCues = new();
     private readonly Dictionary<string, ulong> positionTimes = new();
     private readonly Dictionary<string, string> positionEvidence = new();
     private double lastSummary;
@@ -50,6 +52,7 @@ public sealed class NativeEventMapper(string session)
             segment++;
             categoryNames.Clear(); playbacks.Clear(); playerCues.Clear(); voices.Clear(); positions.Clear(); spatialState.Clear();
             listeners.Clear(); pendingSpatial.Clear(); pendingSpatialResets.Clear(); playbackEndReasons.Clear(); voiceSources.Clear(); positionTimes.Clear(); positionEvidence.Clear();
+            playbackFirstVoice.Clear(); sourceLastCues.Clear();
         }
         double time = Math.Max(captureStart, packet.TimeMicroseconds) / 1_000_000d;
         lastTime = Math.Max(lastTime, time);
@@ -77,12 +80,18 @@ public sealed class NativeEventMapper(string session)
         {
             if (!positions.TryGetValue(id, out var pos)) return null;
             var links = voiceSources.Where(v => v.Value == id && voices.ContainsKey(v.Key)).Select(v => voices[v.Key]).Distinct()
-                .Select(owner => new { playback = owner, cue = playbacks.GetValueOrDefault(owner).Name ?? "Cue 名称未知" }).ToArray();
+                .Select(owner => new { playback = owner, cue = playbacks.GetValueOrDefault(owner).Name ?? "Cue 名称未知",
+                    observedAt = playbackFirstVoice.GetValueOrDefault(owner, time) }).ToArray();
+            if (links.OrderBy(v=>v.observedAt).LastOrDefault() is {} recent &&
+                (!sourceLastCues.TryGetValue(id,out var priorCue) || recent.observedAt>=priorCue.ObservedAt || recent.playback==priorCue.Playback))
+                sourceLastCues[id]=(recent.playback,recent.cue,recent.observedAt);
+            var lastPlayback=sourceLastCues.TryGetValue(id,out var lastCue)
+                ? new {playback=lastCue.Playback,cue=lastCue.Cue,observedAt=lastCue.ObservedAt} : null;
             var ev = E("position", links.Length == 0 ? "音源（未观测到播放关联）" : string.Join(" · ", links.Select(v => v.cue).Distinct()),
                 id, entity: "source", detail: "CRI 音源世界坐标；名称来自原生 Voice/Cue 关联，不是 GameObject 名称");
             ev.x = pos.X; ev.y = pos.Y; ev.z = pos.Z;
             ev.raw = JsonSerializer.Serialize(new { native = JsonSerializer.Deserialize<JsonElement>(raw),
-                derived = new { links, positionObservedAtMicroseconds = positionTimes.GetValueOrDefault(id), positionEvidence = positionEvidence.GetValueOrDefault(id) } });
+                derived = new { links, lastPlayback, positionObservedAtMicroseconds = positionTimes.GetValueOrDefault(id), positionEvidence = positionEvidence.GetValueOrDefault(id) } });
             return ev;
         }
         if (packet.Command != 31)
@@ -112,6 +121,7 @@ public sealed class NativeEventMapper(string session)
             if (f.EndsWith("_Destroy", StringComparison.Ordinal) || f.EndsWith("_Create", StringComparison.Ordinal))
             {
                 positions.Remove(spatialId); positionTimes.Remove(spatialId); positionEvidence.Remove(spatialId); listeners.Remove(spatialId); pendingSpatial.Remove(spatialId); pendingSpatialResets.Remove(spatialId);
+                if(!listener)sourceLastCues.Remove(spatialId);
                 foreach (var key in spatialState.Keys.Where(k => k.StartsWith(spatialId + "/", StringComparison.Ordinal)).ToArray()) spatialState.Remove(key);
                 foreach (var key in voiceSources.Where(v => v.Value == spatialId).Select(v => v.Key).ToArray()) voiceSources.Remove(key);
                 yield return E("remove", listener ? "Listener 状态已清除" : "音源状态已清除", spatialId, entity: listener ? "listener" : "source", detail: "原生对象生命周期重置；等待已提交位置");
@@ -239,6 +249,7 @@ public sealed class NativeEventMapper(string session)
             if (f == "SoundVoice_Allocate")
             {
                 voices[id] = playback;
+                playbackFirstVoice.TryAdd(playback,time);
                 if (Has("CriAtomEx3dSourceHn") && S("CriAtomEx3dSourceHn") is not ("" or "0x0"))
                     voiceSources[id] = changedSource = S("CriAtomEx3dSourceHn");
             }
@@ -296,7 +307,7 @@ public sealed class NativeEventMapper(string session)
             ev.lifecycle = "released";
             if (playbackEndReasons.Remove(playback, out var reasons) && reasons.Count == 1) ev.endReason = reasons.Single();
             yield return ev;
-            playbacks.Remove(playback); yield break;
+            playbacks.Remove(playback); playbackFirstVoice.Remove(playback); yield break;
         }
         if (f == "ExCategoryConfig" && Has("Index"))
         {

@@ -40,6 +40,8 @@ public sealed class SmokeApp : Application
                 try
                 {
                     CueCatalogChecks.Run(Check);
+                    SpatialHistoryChecks.Run(Check);
+                    SpatialLabelChecks.Run(Check);
                     var lifecycle = new[] {
                         new WireEvent {kind="request",entity="cue",objectId="pb1",name="Same Cue",time=1},
                         new WireEvent {kind="request",entity="cue",objectId="pb2",name="Same Cue",time=2},
@@ -258,6 +260,40 @@ public sealed class SmokeApp : Application
                     Check((double)typeof(TimelineControl).GetField("_vertical",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(mixingTimeline)!>0
                         && State().GetProperty("live").GetBoolean()&&ReferenceEquals(mixingTimeline.Selected,selectedBefore)&&State().GetProperty("end").GetDouble()==endBefore,
                         "滚动条位置可拖到底，且不改变 Live、时间范围与选中事件");
+                    window.ApplyUiAction("filter","Music Fixture");
+                    categoryIdField.SetValue(window,"unrelated-category");categoryNameField.SetValue(window,"Other Category");
+                    typeof(MainWindow).GetMethod("UpdateEvents",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,null);
+                    Check(MixingPresentation.Latest(mixingTimeline.Events,mixingTimeline.End).Length==15
+                        &&!Field<TextBox>("_filter").IsVisible&&!Field<Button>("_categoryChip").IsVisible,
+                        "混音页保留全部全局 Bus，不被 Cue 或 Category 筛选清空");
+                    Check(window.GetVisualDescendants().OfType<TextBlock>().Any(label=>label.IsVisible&&label.Text=="全局 Bus · 不受声音筛选影响"),
+                        "混音页明确说明全局 Bus 的筛选范围");
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/mixing-cue-filter.png"),window.CapturePng("window"));
+                    window.ApplyUiAction("workspace","Timeline");
+                    Check(Field<TextBox>("_filter").IsVisible&&Field<TextBox>("_filter").Text=="Music Fixture"
+                        &&Field<Button>("_categoryChip").IsVisible&&Field<TimelineControl>("_timeline").Events.Length==0,
+                        "离开混音页恢复原声音与 Category 筛选，不丢失用户条件");
+                    categoryIdField.SetValue(window,"");categoryNameField.SetValue(window,"");
+                    var spatialFilterSession=Meta(Guid.NewGuid().ToString("N"),"native","spatial-filter");sessions[spatialFilterSession.Id]=spatialFilterSession;
+                    spatialFilterSession.Accept(new WireEvent {session=spatialFilterSession.Id,seq=1,time=2,kind="position",entity="source",objectId="matching-source",name="Music Fixture"});
+                    spatialFilterSession.Accept(new WireEvent {session=spatialFilterSession.Id,seq=2,time=2,kind="position",entity="source",objectId="other-source",name="Other Cue",x=9});
+                    spatialFilterSession.Accept(new WireEvent {session=spatialFilterSession.Id,seq=3,time=2,kind="position",entity="listener",objectId="listener",name="Listener",x=1});
+                    spatialFilterSession.Accept(new WireEvent {session=spatialFilterSession.Id,seq=4,time=2,kind="position",entity="distance-listener",objectId="listener",name="Distance listener",x=2});
+                    Select(spatialFilterSession);window.ApplyUiAction("workspace","Location");window.ApplyUiAction("range","0:3");window.ApplyUiAction("filter","Music Fixture");
+                    var filteredSpace=Field<TimelineControl>("_timeline");
+                    var filteredPoints=SpatialPresentation.Group(filteredSpace.Events,filteredSpace.End,true);
+                    Check(filteredPoints.Length==3&&filteredPoints.Single(group=>group.Entity=="source").Items.Single().objectId=="matching-source",
+                        "搜索 Cue 只筛选音源，保留基础监听器与衰减监听点");
+                    window.ApplyUiAction("spatial-layer","listener:true");await Task.Delay(120);
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/spatial-cue-filter.png"),window.CapturePng("window"));
+                    spatialFilterSession.Accept(new WireEvent {session=spatialFilterSession.Id,seq=5,time=2.6,kind="remove",entity="listener",objectId="listener"});
+                    window.ApplyUiAction("range","0:3");
+                    Check(SpatialPresentation.Group(filteredSpace.Events,filteredSpace.End,true).All(group=>group.Entity=="source"),
+                        "Cue 筛选保留监听器销毁记录，不复活已移除的监听点");
+                    spatialFilterSession.Accept(new WireEvent {session=spatialFilterSession.Id,seq=6,time=2.8,kind="state",entity="capture-segment"});
+                    window.ApplyUiAction("range","0:3");
+                    Check(SpatialPresentation.Group(filteredSpace.Events,filteredSpace.End,true).Length==0,
+                        "Cue 筛选保留采集段边界，不跨段沿用空间位置");
                     Select(a);
                     window.ApplyUiAction("filter","Alpha");
                     var theme = window.RequestedThemeVariant;
@@ -360,10 +396,10 @@ public sealed class SmokeApp : Application
                     var spatialPng=window.CapturePng("workspace");
                     var pointHits=(List<(Rect rect,WireEvent item)>)typeof(TimelineControl).GetField("_hits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(spatialTimeline)!;
                     var expansionHits=(List<(Rect rect,string key)>)typeof(TimelineControl).GetField("_expandHits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(spatialTimeline)!;
-                    var listenerHit=pointHits.Single(h=>h.item.entity=="distance-listener" && h.rect.Height==46);
+                    var listenerHit=pointHits.Single(h=>h.item.entity=="distance-listener" && h.rect.Height==24);
                     var spatialHits=(List<(Rect rect,WireEvent? item,string? key)>)typeof(TimelineControl).GetField("_spatialHits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(spatialTimeline)!;
-                    var sourceHit=spatialHits.Single(h=>h.key?.StartsWith("spatial:")==true && h.rect.Height==46);
-                    Check(!listenerHit.rect.Intersects(sourceHit.rect) && listenerHit.rect.Height==46 && sourceHit.rect.Height==46, "同坐标监听点与音源堆叠标注及点击区不重叠");
+                    var sourceHit=spatialHits.Single(h=>h.key?.StartsWith("spatial:")==true && h.rect.Height==24);
+                    Check(!listenerHit.rect.Intersects(sourceHit.rect) && listenerHit.rect.Height==24 && sourceHit.rect.Height==24, "同坐标监听点与音源的紧凑图标及点击区不重叠");
                     Check(spatialTimeline.Events.All(e=>e.x==0&&e.z==3), "空间标注错位不改变真实坐标");
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/spatial-same-point.png"),spatialPng);
                     var requestOnly=new WireEvent {kind="request",entity="cue",objectId="request-only",name="g_ui_default",time=1};
@@ -665,9 +701,9 @@ public sealed class SmokeApp : Application
                     Check(overlayTimeline.SpatialOverlayBounds.Height>0&&overlayTimeline.SpatialOverlayMaxScroll>0,"同点列表限高且支持滚动");
                     Check(ToolTip.GetTip(overlayTimeline)==null,"列表打开没有旧tooltip遮挡");
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/v06-spatial-overlay.png"),window.CapturePng("window"));
-                    var beforeOverlay=((List<(Rect rect,WireEvent? item,string? key)>)typeof(TimelineControl).GetField("_spatialHits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(overlayTimeline)!).Where(x=>x.rect.Width<=20).Select(x=>x.rect).ToArray();
+                    var beforeOverlay=overlayTimeline.SpatialMarkers.Select(marker=>marker.Hit).ToArray();
                     overlayTimeline.CloseSpatialList();window.CapturePng("window");
-                    var afterOverlay=((List<(Rect rect,WireEvent? item,string? key)>)typeof(TimelineControl).GetField("_spatialHits",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(overlayTimeline)!).Where(x=>x.rect.Width<=20).Select(x=>x.rect).ToArray();
+                    var afterOverlay=overlayTimeline.SpatialMarkers.Select(marker=>marker.Hit).ToArray();
                     Check(beforeOverlay.Length>0&&beforeOverlay.SequenceEqual(afterOverlay),"空间列表开关不改变画布对象锚点");
                     Check(overlayTimeline.ExpandedKeys.All(k=>!k.StartsWith("spatial:")),"空间列表可独立关闭");
                     Check(EventLogPresentation.Includes(new WireEvent{kind="stop-request"},"请求停止")&&!EventLogPresentation.Includes(new WireEvent{kind="play"},"请求停止"),"停止请求可单独筛选");
@@ -1006,6 +1042,55 @@ public sealed class SmokeApp : Application
                     window.ApplyUiAction("theme","light");await Task.Delay(180);
                     File.WriteAllBytes(Path.GetFullPath(".local/ui-check/acb-catalog-light.png"),window.CapturePng("window"));
 
+                    var diagnosticsClient=Guid.NewGuid().ToString("N");
+                    var unavailable=Meta(diagnosticsClient,"native","diagnostic-take");
+                    var sdkOnly=Meta(diagnosticsClient,"sdk","diagnostic-take");
+                    void CaptureState(Session target,bool connected,string status) => typeof(Session)
+                        .GetMethod("SetCaptureState",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(target,[connected,connected,status]);
+                    CaptureState(unavailable,false,"原生启动不可用：测试 Monitor 未开启");
+                    CaptureState(sdkOnly,true,"SDK 补充已连接");
+                    sessions[unavailable.Id]=unavailable;sessions[sdkOnly.Id]=sdkOnly;
+                    unavailable.StartAutomaticRecording(directory);sdkOnly.StartAutomaticRecording(directory);
+                    for(var index=1;index<=1000;index++)sdkOnly.Accept(new WireEvent {
+                        session=sdkOnly.Id,seq=index,time=index*.01,source="cri-sdk",kind="metric",name="memory.atom.bytes",value=index });
+                    Select(sdkOnly);window.ApplyUiAction("workspace","Timeline");window.ApplyUiAction("live","true");
+                    Check(sdkOnly.Total==1000&&unavailable.Total==0&&ClientCardPresentation.Status([unavailable,sdkOnly])=="原生未就绪",
+                        "SDK持续接收一千条且两通道自动写盘时，卡片仍明确报告原生未就绪");
+                    var diagnosticsTimeline=Field<TimelineControl>("_timeline");
+                    Check(diagnosticsTimeline.PlaybackEmptyVisible&&diagnosticsTimeline.PlaybackEmptyTitle=="原生音频采集未就绪"
+                        &&diagnosticsTimeline.PlaybackEmptyDescription.Contains("Monitor 未开启"),"SDK资源数据不能冒充播放轨道，空轨道直接显示原生失败原因");
+                    Check(Field<TextBlock>("_states").Text=="原生未就绪 · SDK 已连接"
+                        &&Field<TextBlock>("_status").Text=="原生 0 条 · SDK 1,000 条", "顶部不以正在记录掩盖采集失败，底栏分别显示通道接收量");
+                    await Task.Delay(180);
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/native-unavailable-light.png"),window.CapturePng("window"));
+                    CaptureState(unavailable,false,"原生端口属于另一进程 123；当前进程 99");await Task.Delay(350);
+                    Check(ToolTip.GetTip(Field<StackPanel>("_sessions").GetVisualDescendants().OfType<Button>()
+                        .Single(button=>button.Tag?.ToString()=="selected-client"))?.ToString()?.Contains("另一进程 123")==true,
+                        "连接标志不变但失败原因变化时，客户端卡片提示同步更新");
+                    CaptureState(unavailable,true,"原生采集中");await Task.Delay(350);
+                    Check(ReferenceEquals(Field<Session>("_session"),unavailable)&&Field<TimelineControl>("_timeline").PlaybackEmptyTitle=="尚未收到播放事件",
+                        "原生通道恢复后自动切换并清除过期失败提示");
+                    unavailable.Accept(new WireEvent {session=unavailable.Id,seq=1,time=20,source="cri-native",kind="error",name="未知原生函数",detail="UnknownFunction:9999"});
+                    await Task.Delay(350);
+                    Check(Field<TimelineControl>("_timeline").PlaybackEmptyVisible
+                        &&Field<TimelineControl>("_timeline").PlaybackEmptyDescription.Contains("UnknownFunction:9999"),
+                        "原生收到消息但解析不出播放事件时，空轨道显示诊断而非空白");
+                    window.ApplyUiAction("theme","dark");await Task.Delay(120);
+                    File.WriteAllBytes(Path.GetFullPath(".local/ui-check/native-protocol-diagnostic-dark.png"),window.CapturePng("window"));
+                    unavailable.Accept(new WireEvent {session=unavailable.Id,seq=2,time=21,source="cri-native",kind="request",entity="cue",objectId="diagnostic-playback",name="诊断测试声音"});
+                    unavailable.Accept(new WireEvent {session=unavailable.Id,seq=3,time=21,source="cri-native",kind="play",entity="voice",objectId="diagnostic-voice",parentId="diagnostic-playback"});
+                    await Task.Delay(350);
+                    Check(!Field<TimelineControl>("_timeline").PlaybackEmptyVisible&&State().GetProperty("playbackNotice").ValueKind==JsonValueKind.Null,
+                        "真实播放事件到达后显示轨道并自动隐藏空轨道诊断");
+                    window.ApplyUiAction("filter","没有匹配的声音");
+                    Check(Field<TimelineControl>("_timeline").PlaybackEmptyVisible
+                        &&Field<TimelineControl>("_timeline").PlaybackEmptyTitle=="当前筛选没有播放实例", "筛选造成的空轨道不误报为原生采集失败");
+                    var oldUnavailable=Meta(diagnosticsClient,"native","old-diagnostic-take");
+                    CaptureState(oldUnavailable,false,"旧采集失败");
+                    Check(ClientCardPresentation.UnavailableNative([unavailable,sdkOnly,oldUnavailable])==null,
+                        "旧采集段原生失败不会污染当前健康通道状态");
+                    await SpatialHistoryChecks.RunUi(window, session=>sessions[session.Id]=session, Check);
+                    await SpatialLabelChecks.RunUi(window, session=>sessions[session.Id]=session, Check);
                     Console.WriteLine($"结果：{passed}/{passed} UI 检查通过"); desktop.Shutdown(0);
                 }
                 catch (Exception ex) { Console.Error.WriteLine($"FAIL：已通过 {passed} 项；{ex}"); desktop.Shutdown(1); }

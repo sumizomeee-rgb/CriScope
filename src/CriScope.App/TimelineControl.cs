@@ -10,7 +10,7 @@ using Avalonia.Media;
 using CriScope.Core;
 namespace CriScope.App;
 
-public sealed class TimelineControl : Control
+public sealed partial class TimelineControl : Control
 {
     internal Palette Palette { get; set; } = new(false);
     public WireEvent[] Events { get; set; } = [];
@@ -24,6 +24,10 @@ public sealed class TimelineControl : Control
     public double Span { get; set; } = 30;
     public bool Live { get; set; } = true;
     public bool SourceConnected { get; set; } = true;
+    public string PlaybackEmptyTitle { get; set; } = "尚未收到播放事件";
+    public string PlaybackEmptyDescription { get; set; } = "内存、资源和原始协议消息不会直接生成播放轨道。";
+    public bool PlaybackEmptyVisible => Mode == "Timeline" && !PlaybackGroups().Any(group =>
+        (group.End?.time ?? group.Discontinuity?.time) is not { } ended || ended >= Start);
     public bool BusHistoryIsSparse { get; set; }
     public double TimeOrigin { get; set; }
     public HashSet<string> ControlKinds { get; } = new(ControlPresentation.Kinds, StringComparer.Ordinal);
@@ -89,7 +93,7 @@ public sealed class TimelineControl : Control
         }
         else if(Mode == "Location")
         {
-            SpatialFocusId=item.objectId;
+            SpatialFocusId=item.objectId; SpatialView.Fit();
             ShowSources = true;
             var cluster = SpatialPresentation.Group(Events,End,ShowBaseListeners,true,ShowDistanceListeners).FirstOrDefault(g=>g.Items.Any(e=>e.objectId==item.objectId));
             foreach(var key in _expanded.Where(k=>k.StartsWith("spatial:")).ToArray()) _expanded.Remove(key);
@@ -326,6 +330,7 @@ public sealed class TimelineControl : Control
             if(Mode=="Location")
             {
                 if(SpatialOverlayBounds.Contains(e.GetPosition(this)))_vertical=Math.Clamp(_vertical-e.Delta.Y*34,0,SpatialOverlayMaxScroll);
+                else ZoomSpatial(e.GetPosition(this),e.Delta.Y);
                 InvalidateVisual();e.Handled=true;return;
             }
             if(Mode!="Mixing" && e.KeyModifiers.HasFlag(KeyModifiers.Control)) {
@@ -345,6 +350,8 @@ public sealed class TimelineControl : Control
             Focus();_axisKeyboardFocus=false;var p=e.GetPosition(this);
             if(TimeAxisToggleVisible&&TimeAxisToggleBounds.Contains(p))
             {SelectTimeAxis(!PreferWallTime);e.Handled=true;return;}
+            if(Mode=="Location"&&SpatialView.Plot.Contains(p)&&(_space||e.GetCurrentPoint(this).Properties.IsMiddleButtonPressed))
+            { _spatialPanStart=p;e.Pointer.Capture(this);e.Handled=true;return; }
             if(Mode=="Location"&&SpatialOverlayBounds.Contains(p))
             {
                 SetHoveredLink(null);
@@ -374,6 +381,9 @@ public sealed class TimelineControl : Control
                 var spatial=_spatialHits.LastOrDefault(h=>h.rect.Contains(p));
                 if(spatial.key!=null){ToggleExpansion(spatial.key);e.Handled=true;return;}
                 if(spatial.item!=null){Selected=spatial.item;EventSelected?.Invoke(spatial.item);InvalidateVisual();e.Handled=true;return;}
+                if(SpatialView.Plot.Contains(p)&&e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+                { _spatialPanStart=p;e.Pointer.Capture(this);e.Handled=true;return; }
+                e.Handled=true;return;
             }
             if(Mode=="Mixing"&&MixingMaxScroll>0&&MixingScrollTrack.Contains(p)&&e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
             { var thumb=MixingScrollThumb;_scrollGrab=thumb.Contains(p)?p.Y-thumb.Y:thumb.Height/2;_scrollDragging=true;SetMixingScrollFromPointer(p.Y);e.Pointer.Capture(this);e.Handled=true;return; }
@@ -387,6 +397,8 @@ public sealed class TimelineControl : Control
         };
         PointerMoved += (_,e) => {
             var p=e.GetPosition(this);
+            if(_spatialPanStart is {} previous)
+            { PanSpatial(p-previous);_spatialPanStart=p;e.Handled=true;return; }
             if(_drag==null&&!_spatialScrollDragging&&!_scrollDragging&&TimeAxisToggleVisible&&TimeAxisToggleBounds.Contains(p))
             {SetHoveredTrack(null);SetHoveredToggle(null);SetHoveredLink(null);SetAxisToggleHovered(true);Cursor=LinkCursor;ToolTip.SetTip(this,TimeAxisToggleTip());return;}
             if(_axisToggleHovered){SetAxisToggleHovered(false);Cursor=null;}
@@ -403,6 +415,10 @@ public sealed class TimelineControl : Control
             if(_drag is not {} start){
                 var playbackTip=Mode=="Timeline"?_playbackTips.LastOrDefault(h=>h.rect.Contains(p)).tip:null;
                 if(playbackTip!=null){ToolTip.SetTip(this,playbackTip);return;}
+                if(Mode=="Location")
+                {
+                    var spatialTip=SpatialTipAt(p);Cursor=spatialTip!=null?LinkCursor:null;ToolTip.SetTip(this,spatialTip);return;
+                }
                 var hit=_hits.LastOrDefault(h=>h.rect.Contains(p));ToolTip.SetTip(this,hit.item==null?null:$"{hit.item.name}\n{(Mode=="AISAC"?ControlRowTipStamp(hit.item.time):DisplayStamp(hit.item.time))} · {hit.item.kind}\n{hit.item.detail}");return;
             }
             var delta=p.X-start.X;if(Math.Abs(delta)<8)return;
@@ -411,8 +427,9 @@ public sealed class TimelineControl : Control
             ViewChanged?.Invoke();InvalidateVisual();
         };
         PointerExited += (_,_)=>{SetHoveredTrack(null);SetAxisToggleHovered(false);SetHoveredToggle(null);SetHoveredLink(null);Cursor=null;ToolTip.SetTip(this,null);};
-        PointerReleased += (_,e)=>{_drag=null;_scrollDragging=false;_spatialScrollDragging=false;e.Pointer.Capture(null);};
-        KeyDown += (_,e)=>{if(e.Key==Key.Enter&&_axisKeyboardFocus&&TimeAxisToggleVisible){SelectTimeAxis(!PreferWallTime);e.Handled=true;}else if(e.Key==Key.Escape&&Mode=="Location"&&_spatialExpandedKey!=null){CloseSpatialList();e.Handled=true;}else if(e.Key==Key.Space){_space=true;e.Handled=true;}};
+        PointerReleased += (_,e)=>{_drag=null;_spatialPanStart=null;_scrollDragging=false;_spatialScrollDragging=false;e.Pointer.Capture(null);};
+        PointerCaptureLost += (_,_)=>{_spatialPanStart=null;_drag=null;_spatialScrollDragging=false;_scrollDragging=false;};
+        KeyDown += (_,e)=>{if(Mode=="Location"&&e.Key is Key.F or Key.Home){FitSpatial();e.Handled=true;}else if(Mode=="Location"&&e.Key==Key.C){FocusListeners();e.Handled=true;}else if(e.Key==Key.Enter&&_axisKeyboardFocus&&TimeAxisToggleVisible){SelectTimeAxis(!PreferWallTime);e.Handled=true;}else if(e.Key==Key.Escape&&Mode=="Location"&&_spatialExpandedKey!=null){CloseSpatialList();e.Handled=true;}else if(e.Key==Key.Space){_space=true;e.Handled=true;}};
         KeyUp += (_,e)=>{if(e.Key==Key.Space){_space=false;e.Handled=true;}};
         LostFocus += (_,_)=>{_space=false;_axisKeyboardFocus=false;InvalidateVisual();};
     }
@@ -435,11 +452,16 @@ public sealed class TimelineControl : Control
     private void RowName(DrawingContext c,string name,double y,IBrush? brush=null)
     {using var clip=c.PushClip(new Rect(12,y,LabelWidth-24,23));Text(c,name,12,y,brush??Palette.Text,12);}
     private void Empty(DrawingContext c,string title,string description)
-    {Text(c,title,26,105,Palette.Text,18);Text(c,description,26,141,size:12);}
+    {
+        Text(c,Elide(title,Math.Max(0,Bounds.Width-52),18),26,105,Palette.Text,18);
+        var lines=description.Split('\n');
+        for(var index=0;index<lines.Length;index++)
+            Text(c,Elide(lines[index],Math.Max(0,Bounds.Width-52),12),26,141+index*22,size:12);
+    }
     public override void Render(DrawingContext c)
     {
-        base.Render(c);c.FillRectangle(Palette.Canvas,new Rect(Bounds.Size));_links.Clear();_hits.Clear();_playbackTips.Clear();_relatedCueBounds.Clear();_expandHits.Clear();_toggleHits.Clear();_spatialHits.Clear();_spatialListHits.Clear();_trackRows.Clear();_majorGridXs.Clear();SpatialOverlayBounds=default;SpatialOverlayMaxScroll=0;_spatialExpandedKey=null;
-        if(Events.Length==0&&SupplementMetrics.Length==0){Empty(c,"等待声音到来","在游戏音频调试中开启 CriScope 采集，或从右上角打开记录。");return;}
+        base.Render(c);c.FillRectangle(Palette.Canvas,new Rect(Bounds.Size));_links.Clear();_hits.Clear();_playbackTips.Clear();_relatedCueBounds.Clear();_expandHits.Clear();_toggleHits.Clear();_spatialHits.Clear();_spatialListHits.Clear();_spatialCueTips.Clear();SpatialMarkers.Clear();_trackRows.Clear();_majorGridXs.Clear();SpatialOverlayBounds=default;SpatialOverlayMaxScroll=0;_spatialExpandedKey=null;
+        if(Events.Length==0&&SupplementMetrics.Length==0&&SpatialHistory==null){Empty(c,Mode=="Timeline"?PlaybackEmptyTitle:"等待声音到来",Mode=="Timeline"?PlaybackEmptyDescription:"在游戏音频调试中开启 CriScope 采集，或从右上角打开记录。");return;}
         if(Mode=="Location"){DrawLocations(c);return;}if(Mode=="Mixing"){DrawMixing(c);DrawScrollHint(c);return;}
         var axisStart=Math.Max(TimeOrigin,Start);
         var clockAtStart=ShowingWallTime?ClockTimeAt?.Invoke(axisStart):null;
@@ -506,6 +528,7 @@ public sealed class TimelineControl : Control
         Text(c,"声音活动",LabelWidth+10,45,Palette.Muted,11);
         c.DrawLine(new Pen(Palette.TimelineGrid,.7),new Point(LabelWidth,34),new Point(LabelWidth,Bounds.Height-28));
         var groups=PlaybackGroups();
+        if(PlaybackEmptyVisible){Empty(c,PlaybackEmptyTitle,PlaybackEmptyDescription);return;}
         double y=75-_vertical;int row=0;
         using var clip=c.PushClip(new Rect(0,68,Bounds.Width,Math.Max(0,Bounds.Height-96)));
         foreach(var group in groups)
@@ -952,11 +975,11 @@ public sealed class TimelineControl : Control
     private static readonly Geometry SpeakerIcon=Geometry.Parse(VisualLanguage.Path(IconKind.Source));
     private void DrawLocations(DrawingContext c)
     {
-        Text(c,"空间 · XZ 俯视",16,19,Palette.Text,16);
+        Text(c,SpatialHistory==null?"空间 · XZ 俯视":"历史影子 · XZ 俯视",16,19,Palette.Text,16);
         DrawToggle(c,new Rect(16,48,108,28),"音源",ShowSources,"source",Palette.Voice);
         DrawToggle(c,new Rect(134,48,153,28),"衰减监听点",ShowDistanceListeners,"distance-listener",Palette.Listener);
         DrawToggle(c,new Rect(298,48,155,28),"基础监听器",ShowBaseListeners,"listener",Palette.Listener);
-        var clusters=SpatialPresentation.Group(Events,End,ShowBaseListeners,ShowSources,ShowDistanceListeners);
+        var clusters=SpatialPresentation.Group(SpatialHistory?.Moment.Points??Events,SpatialHistory?.Moment.At??End,ShowBaseListeners,ShowSources,ShowDistanceListeners);
         var positions=clusters.SelectMany(g=>g.Items).ToArray();
         if(positions.Length==0)
         {
@@ -974,57 +997,89 @@ public sealed class TimelineControl : Control
             _spatialExpandedKey=expanded.Key;
         }
         double plotRight=Bounds.Width-30;
-        double cx=(positions.Min(e=>e.x)+positions.Max(e=>e.x))/2,cz=(positions.Min(e=>e.z)+positions.Max(e=>e.z))/2;
-        var extent=Math.Max(2,positions.Max(e=>Math.Max(Math.Abs(e.x-cx),Math.Abs(e.z-cz))))*1.25;
-        if(positions.FirstOrDefault(e=>e.objectId==SpatialFocusId) is {} focus) {cx=focus.x;cz=focus.z;}
-        var center=new Point((40+plotRight)/2,(Bounds.Height+100)/2);
-        var scale=Math.Max(1,Math.Min(plotRight-100,Bounds.Height-190))/(2*extent);
-        for(int i=-2;i<=2;i++){var x=center.X+i*extent*scale/2;var z=center.Y+i*extent*scale/2;c.DrawLine(new Pen(Palette.Border,.7),new Point(x,115),new Point(x,Bounds.Height-30));c.DrawLine(new Pen(Palette.Border,.7),new Point(40,z),new Point(plotRight,z));}
-        Text(c,"+Z ↑",44,115,size:10);Text(c,"+X →",Math.Max(44,plotRight-42),Bounds.Height-50,size:10);
-        Text(c,$"每格 {extent/2:0.##} 坐标单位",44,Bounds.Height-50,size:10);
-        var labels=new List<Rect>();
-        if(expanded!=null)labels.Add(SpatialOverlayBounds.Inflate(4));
-        var anchors=new List<(Point point,bool listener,SpatialCluster cluster)>();
-        // Reserve listener labels first, then fit sources around them. Markers and popup have separate layers.
-        foreach(var cluster in clusters.OrderBy(g=>g.Entity=="source"?1:0))DrawCluster(cluster);
-        foreach(var marker in anchors.OrderBy(a=>a.listener?1:0))
+        var plot=new Rect(40,122,Math.Max(40,Bounds.Width-80),Math.Max(40,Bounds.Height-184));
+        SpatialView.Layout(positions,plot,SpatialFocusId);
+        var extent=SpatialView.Extent;
+        double step=Math.Pow(10,Math.Floor(Math.Log10(extent/2)));
+        if(extent/2/step>=5)step*=5;else if(extent/2/step>=2)step*=2;
+        var minimum=SpatialView.WorldAt(plot.BottomLeft);var maximum=SpatialView.WorldAt(plot.TopRight);
+        using(var clip=c.PushClip(plot))
         {
-            var brush=marker.listener?Palette.Listener:Palette.Voice;
-            c.DrawEllipse(Palette.Canvas,new Pen(brush,1.4),marker.point,4,4);
-            if(marker.listener)DrawSpatialIcon(c,new Point(marker.point.X,marker.point.Y-14),true);
-            if(Selected is {} selected&&marker.cluster.Items.Any(e=>e.entity==selected.entity&&e.objectId==selected.objectId))c.DrawEllipse(null,new Pen(Palette.Selection,2),marker.point,9,9);
-            var hit=new Rect(marker.point.X-10,marker.point.Y-(marker.listener?26:10),20,marker.listener?36:20);
-            if(marker.cluster.Items.Length==1)_hits.Add((hit,marker.cluster.Items[0]));
-            _spatialHits.Add((hit,marker.cluster.Items.Length==1?marker.cluster.Items[0]:null,marker.cluster.Items.Length>1?marker.cluster.Key:null));
+            var firstX=Math.Ceiling(minimum.X/step)*step;
+            for(int i=0;i<100&&firstX+i*step<=maximum.X;i++)
+            {var world=firstX+i*step;var x=plot.Center.X+(world-SpatialView.CenterX)*SpatialView.Scale;c.DrawLine(new Pen(Palette.Border,.7),new Point(x,plot.Top),new Point(x,plot.Bottom));}
+            var firstZ=Math.Ceiling(minimum.Y/step)*step;
+            for(int i=0;i<100&&firstZ+i*step<=maximum.Y;i++)
+            {var world=firstZ+i*step;var z=plot.Center.Y-(world-SpatialView.CenterZ)*SpatialView.Scale;c.DrawLine(new Pen(Palette.Border,.7),new Point(plot.Left,z),new Point(plot.Right,z));}
+            if(SpatialHistory is {} history)
+                foreach(var distance in history.Moment.Distances.Where(d=>positions.Contains(d.Source)&&positions.Contains(d.Listener)))
+                {
+                    var a=SpatialView.Project(distance.Source);var b=SpatialView.Project(distance.Listener);
+                    c.DrawLine(new Pen(Palette.Listener,1,DashStyle.Dash),a,b);
+                    Text(c,$"{distance.Value:0.###} · {(distance.Bound?"绑定":"参考")}",(a.X+b.X)/2,(a.Y+b.Y)/2-16,Palette.Listener,10);
+                }
         }
-        if(clusters.Any(cluster=>cluster.Items.Length>1))Text(c,"同点对象可展开",16,Bounds.Height-21,size:10);
+        Text(c,"+Z ↑",44,122,size:10);Text(c,"+X →",Math.Max(44,plotRight-42),Bounds.Height-50,size:10);
+        Text(c,$"每格 {step:0.###} 坐标单位",44,Bounds.Height-50,size:10);
+        if(SpatialHistory is {} scene)Text(c,Elide($"{scene.Moment.Phase} · {DisplayStamp(scene.Moment.At)} · {scene.Name}（历史位置）",Math.Max(0,Bounds.Width-32),11),16,104,Palette.Request,11);
+        var cueIndex=SpatialCues();
+        var markers=new List<(Point Anchor,Point Icon,Rect Hit,SpatialCluster Cluster,string Caption,bool Active,Rect? Label)>();
+        foreach(var placement in SpatialView.Arrange(clusters))
+        {
+            var cluster=placement.Cluster;
+            var states=cluster.Items.Select(e=>cueIndex.For(e)).ToArray();
+            var active=SpatialHistory==null&&SourceConnected&&cluster.Entity=="source"&&states.Any(s=>s.Active);
+            var captions=states.OrderByDescending(s=>s.Active).Select(s=>s.Caption).Where(s=>s.Length>0).Distinct().ToArray();
+            var caption=cluster.Entity!="source"?"":SpatialHistory?.Name??(captions.Length==0?"":captions[0]+(captions.Length>1?$" +{captions.Length-1}":""));
+            markers.Add((placement.Anchor,placement.Icon,placement.Hit,cluster,caption,active,placement.Label));
+        }
+        // Compact Cue labels stay near their icon. When crowded, the icon remains available through Hover.
+        foreach(var marker in markers.OrderByDescending(m=>m.Active))
+        {
+            var cluster=marker.Cluster;bool listener=cluster.Entity!="source";
+            var brush=listener?Palette.Listener:marker.Active?Palette.Voice:Palette.Muted;
+            var selected=Selected is {} selectedEvent&&cluster.Items.Any(e=>e.session==selectedEvent.session&&e.entity==selectedEvent.entity&&e.objectId==selectedEvent.objectId);
+            var tip=string.Join("\n\n",cluster.Items.Take(8).Select(SpatialCueTip))+(cluster.Items.Length>1?$"\n\n同点 {cluster.Items.Length} 个对象 · 点击展开列表":"");
+            if(marker.Anchor!=marker.Icon)
+            {
+                c.DrawLine(new Pen(Palette.Muted,.65),marker.Anchor,marker.Icon);
+                c.DrawEllipse(Palette.Canvas,new Pen(Palette.Muted,1),marker.Anchor,2,2);
+            }
+            if(SpatialHistory!=null)c.DrawEllipse(null,new Pen(Palette.Muted,1,DashStyle.Dash),marker.Icon,12,12);
+            DrawSpatialIcon(c,marker.Icon,listener,brush);
+            if(selected)c.DrawEllipse(null,new Pen(Palette.Selection,1.5),marker.Icon,14,14);
+            if(cluster.Items.Length>1)
+            {
+                var badge=new Rect(marker.Icon.X+5,marker.Icon.Y-15,Math.Max(14,TextWidth(cluster.Items.Length.ToString(),9)+6),14);
+                c.DrawRectangle(Palette.Canvas,null,badge,3,3);Text(c,cluster.Items.Length.ToString(),badge.X+3,badge.Y,brush,9);
+            }
+            SpatialMarkers.Add(new(marker.Hit,cluster.Entity,marker.Caption,marker.Active,cluster.Items.Length,marker.Label));
+            AddSpatialHit(marker.Hit,cluster,tip);
+            if(marker.Caption.Length==0)continue;
+            const double size=12;
+            var label=marker.Label;
+            if(label==null||expanded!=null&&label.Value.Intersects(SpatialOverlayBounds))continue;
+            var caption=Elide(marker.Caption,label.Value.Width-10,size);
+            var width=Math.Min(label.Value.Width,TextWidth(caption,size)+10);
+            // Anchor the text edge nearest the icon; a short Cue must not float at the far end of its reserved slot.
+            var captionBox=new Rect(label.Value.Right<=marker.Icon.X?label.Value.Right-width:label.Value.Left,label.Value.Y,width,label.Value.Height);
+            var labelEdge=new Point(Math.Clamp(marker.Icon.X,captionBox.Left,captionBox.Right),captionBox.Center.Y);
+            if(Math.Abs(labelEdge.X-marker.Icon.X)>22)c.DrawLine(new Pen(Palette.Muted,.65),marker.Icon,labelEdge);
+            c.DrawRectangle(Palette.Canvas,null,captionBox,3,3);
+            Text(c,caption,captionBox.X+5,captionBox.Y+3,brush,size);
+            AddSpatialHit(captionBox,cluster,tip);
+        }
+        var outside=positions.Count(p=>!plot.Contains(SpatialView.Project(p)));
+        if(outside>0)Text(c,$"{outside} 个对象在画外 · F 全览",Math.Max(300,Bounds.Width-235),85,Palette.Request,11);
+        Text(c,"取景固定 · 滚轮缩放 · 拖拽空白平移 · F 全览 · C 定位监听器"+(clusters.Any(cluster=>cluster.Items.Length>1)?" · 同点可展开":""),16,Bounds.Height-21,size:10);
         _contentHeight=0;
         if(expanded!=null)DrawExpanded(expanded);
 
-        void DrawCluster(SpatialCluster cluster)
+        void AddSpatialHit(Rect hit,SpatialCluster cluster,string tip)
         {
-            var e=cluster.Items[0];bool listener=cluster.Entity!="source";
-            var anchor=new Point(center.X+(e.x-cx)*scale,center.Y-(e.z-cz)*scale);
-            anchors.Add((anchor,listener,cluster));
-            double labelWidth=Math.Min(250,Math.Max(120,plotRight-52));
-            var area=new Rect(26,112,Math.Max(labelWidth,plotRight-42),Math.Max(46,Bounds.Height-166));
-            var label=SpatialPresentation.PlaceLabel(anchor,labelWidth,area,labels);
-            // In crowded scenes keep the measured marker available instead of drawing overlapping full labels.
-            if(label==null)return;
-            labels.Add(label.Value);
-            double left=label.Value.X,top=label.Value.Y;
-            var brush=listener?Palette.Listener:Palette.Voice;
-            c.DrawLine(new Pen(brush,.8),anchor,new Point(left,top+23));
-            c.FillRectangle(Palette.Panel,label.Value);
-            if(Selected is {} selected && cluster.Items.Any(item=>item.objectId==selected.objectId && item.entity==selected.entity)) Highlight(c,label.Value);
-            DrawSpatialIcon(c,new Point(left+16,top+23),listener);
-            using(var labelClip=c.PushClip(new Rect(left+32,top+3,labelWidth-38,40)))
-            {
-                Text(c,cluster.Items.Length>1?$"{cluster.Items.Length} 个{(listener?"监听器":"音源")} · 展开列表":e.name,left+34,top+5,brush);
-                Text(c,$"X {e.x:0.##} · Y {e.y:0.##} · Z {e.z:0.##}",left+34,top+25,size:10);
-            }
-            if(cluster.Items.Length>1)_spatialHits.Add((label.Value,null,cluster.Key));
-            else {_hits.Add((label.Value,e));_spatialHits.Add((label.Value,e,null));}
+            _spatialCueTips.Add((hit,tip));
+            if(cluster.Items.Length==1)_hits.Add((hit,cluster.Items[0]));
+            _spatialHits.Add((hit,cluster.Items.Length==1?cluster.Items[0]:null,cluster.Items.Length>1?cluster.Key:null));
         }
         void DrawExpanded(SpatialCluster cluster)
         {
@@ -1046,7 +1101,9 @@ public sealed class TimelineControl : Control
                 if(y+34<=_spatialListViewport.Top||y>=_spatialListViewport.Bottom)continue;
                 if(i%2==0)c.FillRectangle(Palette.Alternate,new Rect(left+1,y,width-14,34));
                 if(Selected?.objectId==item.objectId&&Selected.entity==item.entity)HighlightRow(c,new Rect(left+1,y+1,width-14,32));
-                Text(c,item.name,left+12,y+3,Palette.Text,11);
+                var cueState=cueIndex.For(item);
+                var caption=cluster.Entity=="source"?(SpatialHistory?.Name??cueState.Caption):item.entity=="distance-listener"?"衰减监听点":"基础监听器";
+                Text(c,Elide(caption.Length>0?caption:"未记录播放关联",width-24,11),left+12,y+3,cluster.Entity!="source"?Palette.Listener:cueState.Active&&SpatialHistory==null&&SourceConnected?Palette.Voice:Palette.Muted,11);
                 Text(c,$"对象 {i+1} · X {item.x:0.##} · Y {item.y:0.##} · Z {item.z:0.##}",left+12,y+19,size:9);
                 var hitTop=Math.Max(y,_spatialListViewport.Top);var hitBottom=Math.Min(y+34,_spatialListViewport.Bottom);
                 if(hitBottom>hitTop)_spatialListHits.Add((new Rect(left+1,hitTop,width-14,hitBottom-hitTop),item));
@@ -1060,10 +1117,10 @@ public sealed class TimelineControl : Control
             }
         }
     }
-    private void DrawSpatialIcon(DrawingContext c,Point point,bool listener)
+    private void DrawSpatialIcon(DrawingContext c,Point point,bool listener,IBrush? brush=null)
     {
         using var transform=c.PushTransform(Matrix.CreateScale(.78,.78)*Matrix.CreateTranslation(point.X-11,point.Y-11));
-        c.DrawGeometry(null,new Pen(listener?Palette.Listener:Palette.Voice,1.8),listener?EarIcon:SpeakerIcon);
+        c.DrawGeometry(null,new Pen(brush??(listener?Palette.Listener:Palette.Voice),1.8),listener?EarIcon:SpeakerIcon);
     }
 
 }
