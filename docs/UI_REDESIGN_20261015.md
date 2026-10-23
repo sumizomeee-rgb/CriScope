@@ -25,8 +25,8 @@
 
 ## 本地交付
 
-- `artifacts/CriScope-v008-win-x64/CriScope.exe`：最终运行目录，保留完整目录一起使用。
-- `artifacts/CriScope-v008-win-x64.zip`：自包含分发包，已检查不包含本地录制与日志。
+- `artifacts/CriScope-v010-win-x64/CriScope.exe`：最终运行目录，保留完整目录一起使用。
+- `artifacts/CriScope-v010-win-x64.zip`：自包含分发包，已检查不包含本地录制与日志。
 - `.local/diagnostics/`：本机验收材料，含两种主题截图、UI 检查结果及发布校验。旧版本录制归档在 `.local/archived-version-data/`，不随分发 ZIP 发布。
 
 记录是音频诊断数据，不包含可回放的声音。当前运行窗口保留了两个通道合并后的显示；重新导入时，原生与 SDK 日志分别作为独立历史会话查看，当前版本不会自动合并历史通道。原生文件用于检查播放与结束原因，SDK 文件用于查看补充指标和元数据。

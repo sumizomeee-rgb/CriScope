@@ -5,6 +5,20 @@ namespace CriScope.App;
 public sealed record SpatialCluster(string Key, string Entity, WireEvent[] Items);
 public static class SpatialPresentation
 {
+    public static (double Horizontal, double Height, double Spatial) Measure(WireEvent a, WireEvent b)
+    {
+        var dx=a.x-b.x;var dz=a.z-b.z;var height=Math.Abs(a.y-b.y);
+        var horizontal=Math.Sqrt(dx*dx+dz*dz);
+        return (horizontal,height,Math.Sqrt(horizontal*horizontal+height*height));
+    }
+    public static Point[] Leader(Point anchor,Point icon)
+    {
+        var delta=new Vector(icon.X-anchor.X,icon.Y-anchor.Y);var length=delta.Length;
+        if(length<1)return [];
+        var end=icon-delta/length*Math.Min(12,length/2);
+        var elbow=new Point(end.X-Math.Sign(delta.X)*Math.Min(12,Math.Abs(end.X-anchor.X)/2),end.Y);
+        return [anchor,elbow,end];
+    }
     // Labels may move; measured anchors never do. No room means marker-only, never an overlapping card.
     public static Rect? PlaceLabel(Point anchor, double width, Rect area, IReadOnlyList<Rect> occupied)
     {
@@ -74,7 +88,7 @@ public static class SpatialPresentation
             .GroupBy(e => (e.entity,e.objectId)).Select(g => g.OrderBy(e => e.time).ThenBy(e => e.seq).Last())
             .Where(e => (!removed.TryGetValue((e.entity,e.objectId),out var time) || time < e.time)
                 && (e.entity != "distance-listener" || !removed.TryGetValue(("listener",e.objectId),out var listenerTime) || listenerTime < e.time))
-            .GroupBy(e => (e.entity,X:Math.Round(e.x,3),Z:Math.Round(e.z,3)))
+            .GroupBy(e => (e.entity,X:e.x,Z:e.z))
             .Select(g => new SpatialCluster($"spatial:{g.Key.entity}:{g.Key.X:R}:{g.Key.Z:R}",g.Key.entity,g.ToArray()))
             .OrderBy(g => g.Entity == "source" ? 0 : g.Entity == "listener" ? 1 : 2).ToArray();
     }

@@ -975,12 +975,13 @@ public sealed partial class TimelineControl : Control
     private static readonly Geometry SpeakerIcon=Geometry.Parse(VisualLanguage.Path(IconKind.Source));
     private void DrawLocations(DrawingContext c)
     {
-        Text(c,SpatialHistory==null?"空间 · XZ 俯视":"历史影子 · XZ 俯视",16,19,Palette.Text,16);
+        Text(c,SpatialHistory==null?"地面俯视 · XZ":"历史地面俯视 · XZ",16,19,Palette.Text,16);
         DrawToggle(c,new Rect(16,48,108,28),"音源",ShowSources,"source",Palette.Voice);
         DrawToggle(c,new Rect(134,48,153,28),"衰减监听点",ShowDistanceListeners,"distance-listener",Palette.Listener);
         DrawToggle(c,new Rect(298,48,155,28),"基础监听器",ShowBaseListeners,"listener",Palette.Listener);
         var clusters=SpatialPresentation.Group(SpatialHistory?.Moment.Points??Events,SpatialHistory?.Moment.At??End,ShowBaseListeners,ShowSources,ShowDistanceListeners);
         var positions=clusters.SelectMany(g=>g.Items).ToArray();
+        _spatialListeners=positions.Where(p=>p.entity!="source").ToArray();
         if(positions.Length==0)
         {
             _contentHeight=0;
@@ -1014,9 +1015,12 @@ public sealed partial class TimelineControl : Control
             if(SpatialHistory is {} history)
                 foreach(var distance in history.Moment.Distances.Where(d=>positions.Contains(d.Source)&&positions.Contains(d.Listener)))
                 {
-                    var a=SpatialView.Project(distance.Source);var b=SpatialView.Project(distance.Listener);
-                    c.DrawLine(new Pen(Palette.Listener,1,DashStyle.Dash),a,b);
-                    Text(c,$"{distance.Value:0.###} · {(distance.Bound?"绑定":"参考")}",(a.X+b.X)/2,(a.Y+b.Y)/2-16,Palette.Listener,10);
+                    DrawGroundDistance(distance.Source,distance.Listener,distance.Bound);
+                }
+            else if(Selected is {entity:"source"} selectedSource && positions.FirstOrDefault(p=>p.entity=="source"&&p.objectId==selectedSource.objectId) is {} source)
+                foreach(var listener in _spatialListeners)
+                {
+                    DrawGroundDistance(source,listener,false);
                 }
         }
         Text(c,"+Z ↑",44,122,size:10);Text(c,"+X →",Math.Max(44,plotRight-42),Bounds.Height-50,size:10);
@@ -1038,22 +1042,16 @@ public sealed partial class TimelineControl : Control
         {
             var cluster=marker.Cluster;bool listener=cluster.Entity!="source";
             var brush=listener?Palette.Listener:marker.Active?Palette.Voice:Palette.Muted;
-            var selected=Selected is {} selectedEvent&&cluster.Items.Any(e=>e.session==selectedEvent.session&&e.entity==selectedEvent.entity&&e.objectId==selectedEvent.objectId);
             var tip=string.Join("\n\n",cluster.Items.Take(8).Select(SpatialCueTip))+(cluster.Items.Length>1?$"\n\n同点 {cluster.Items.Length} 个对象 · 点击展开列表":"");
-            if(marker.Anchor!=marker.Icon)
-            {
-                c.DrawLine(new Pen(Palette.Muted,.65),marker.Anchor,marker.Icon);
-                c.DrawEllipse(Palette.Canvas,new Pen(Palette.Muted,1),marker.Anchor,2,2);
-            }
-            if(SpatialHistory!=null)c.DrawEllipse(null,new Pen(Palette.Muted,1,DashStyle.Dash),marker.Icon,12,12);
+            var leader=SpatialPresentation.Leader(marker.Anchor,marker.Icon);
+            for(int i=1;i<leader.Length;i++)c.DrawLine(new Pen(Palette.Muted,.7),leader[i-1],leader[i]);
             DrawSpatialIcon(c,marker.Icon,listener,brush);
-            if(selected)c.DrawEllipse(null,new Pen(Palette.Selection,1.5),marker.Icon,14,14);
             if(cluster.Items.Length>1)
             {
                 var badge=new Rect(marker.Icon.X+5,marker.Icon.Y-15,Math.Max(14,TextWidth(cluster.Items.Length.ToString(),9)+6),14);
                 c.DrawRectangle(Palette.Canvas,null,badge,3,3);Text(c,cluster.Items.Length.ToString(),badge.X+3,badge.Y,brush,9);
             }
-            SpatialMarkers.Add(new(marker.Hit,cluster.Entity,marker.Caption,marker.Active,cluster.Items.Length,marker.Label));
+            SpatialMarkers.Add(new(marker.Hit,cluster.Entity,marker.Caption,marker.Active,cluster.Items.Length,marker.Label,marker.Anchor));
             AddSpatialHit(marker.Hit,cluster,tip);
             if(marker.Caption.Length==0)continue;
             const double size=12;
@@ -1069,12 +1067,38 @@ public sealed partial class TimelineControl : Control
             Text(c,caption,captionBox.X+5,captionBox.Y+3,brush,size);
             AddSpatialHit(captionBox,cluster,tip);
         }
+        // Coordinate points are rendered last and NEVER displaced by the annotation layout.
+        foreach(var group in markers.GroupBy(m=>m.Anchor))
+        {
+            var hasSource=group.Any(m=>m.Cluster.Entity=="source");
+            var sharedListener=group.Any(m=>m.Cluster.Entity!="source");
+            var brush=hasSource?(group.Any(m=>m.Active)?Palette.Voice:Palette.Muted):Palette.Listener;
+            c.DrawEllipse(brush,new Pen(Palette.Canvas,1.2),group.Key,3.5,3.5);
+            if(hasSource&&sharedListener)c.DrawEllipse(null,new Pen(Palette.Listener,1.2),group.Key,5.5,5.5);
+            if(SpatialHistory!=null)c.DrawEllipse(null,new Pen(Palette.Muted,1,DashStyle.Dash),group.Key,8,8);
+            if(Selected is {} chosen&&group.Any(m=>m.Cluster.Items.Any(p=>p.session==chosen.session&&p.entity==chosen.entity&&p.objectId==chosen.objectId)))
+                c.DrawEllipse(null,new Pen(Palette.Selection,1.5),group.Key,8,8);
+            var anchorHit=new Rect(group.Key.X-6,group.Key.Y-6,12,12);
+            if(group.Count()==1)
+            {
+                var cluster=group.First().Cluster;
+                AddSpatialHit(anchorHit,cluster,string.Join("\n\n",cluster.Items.Take(8).Select(SpatialCueTip)));
+            }
+            else _spatialCueTips.Add((anchorHit,"同一 XZ 坐标 · 使用引出图标选择对象\n"+string.Join("\n\n",group.SelectMany(m=>m.Cluster.Items).Take(8).Select(SpatialCueTip))));
+        }
         var outside=positions.Count(p=>!plot.Contains(SpatialView.Project(p)));
         if(outside>0)Text(c,$"{outside} 个对象在画外 · F 全览",Math.Max(300,Bounds.Width-235),85,Palette.Request,11);
-        Text(c,"取景固定 · 滚轮缩放 · 拖拽空白平移 · F 全览 · C 定位监听器"+(clusters.Any(cluster=>cluster.Items.Length>1)?" · 同点可展开":""),16,Bounds.Height-21,size:10);
+        Text(c,"实点为坐标 · 细线为标注 · Y 为高度 · 滚轮缩放 · 拖拽平移 · F 全览 · C 定位监听器"+(clusters.Any(cluster=>cluster.Items.Length>1)?" · 同点可展开":""),16,Bounds.Height-21,size:10);
         _contentHeight=0;
         if(expanded!=null)DrawExpanded(expanded);
 
+        void DrawGroundDistance(WireEvent source,WireEvent listener,bool bound)
+        {
+            var a=SpatialView.Project(source);var b=SpatialView.Project(listener);
+            var measure=SpatialPresentation.Measure(source,listener);
+            c.DrawLine(new Pen(Palette.Listener,1,DashStyle.Dash),a,b);
+            if(measure.Horizontal>0)Text(c,$"水平 {measure.Horizontal:0.###} · {(bound?"绑定":"参考")}",(a.X+b.X)/2+8,(a.Y+b.Y)/2-16,Palette.Listener,10);
+        }
         void AddSpatialHit(Rect hit,SpatialCluster cluster,string tip)
         {
             _spatialCueTips.Add((hit,tip));

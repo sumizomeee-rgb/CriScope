@@ -42,6 +42,7 @@ public sealed class SmokeApp : Application
                     CueCatalogChecks.Run(Check);
                     SpatialHistoryChecks.Run(Check);
                     SpatialLabelChecks.Run(Check);
+                    SpatialGroundChecks.Run(Check);
                     var lifecycle = new[] {
                         new WireEvent {kind="request",entity="cue",objectId="pb1",name="Same Cue",time=1},
                         new WireEvent {kind="request",entity="cue",objectId="pb2",name="Same Cue",time=2},
@@ -1091,6 +1092,7 @@ public sealed class SmokeApp : Application
                         "旧采集段原生失败不会污染当前健康通道状态");
                     await SpatialHistoryChecks.RunUi(window, session=>sessions[session.Id]=session, Check);
                     await SpatialLabelChecks.RunUi(window, session=>sessions[session.Id]=session, Check);
+                    await SpatialGroundChecks.RunUi(window, session=>sessions[session.Id]=session, Check);
                     Console.WriteLine($"结果：{passed}/{passed} UI 检查通过"); desktop.Shutdown(0);
                 }
                 catch (Exception ex) { Console.Error.WriteLine($"FAIL：已通过 {passed} 项；{ex}"); desktop.Shutdown(1); }

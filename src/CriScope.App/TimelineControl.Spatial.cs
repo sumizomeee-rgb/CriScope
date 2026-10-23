@@ -5,9 +5,10 @@ namespace CriScope.App;
 
 public sealed partial class TimelineControl
 {
-    public sealed record SpatialMarker(Rect Hit, string Entity, string Caption, bool Active, int Count, Rect? CaptionBounds);
+    public sealed record SpatialMarker(Rect Hit, string Entity, string Caption, bool Active, int Count, Rect? CaptionBounds, Point Anchor);
     public List<SpatialMarker> SpatialMarkers { get; } = [];
     private readonly List<(Rect Rect, string Tip)> _spatialCueTips = [];
+    private WireEvent[] _spatialListeners = [];
     private WireEvent[]? _spatialCueEvents;
     private double _spatialCueEnd = double.NaN;
     private SpatialCueIndex _spatialCues = new();
@@ -26,12 +27,22 @@ public sealed partial class TimelineControl
         var coordinates = $"X {point.x:0.###} · Y {point.y:0.###} · Z {point.z:0.###}";
         if (point.entity != "source") return (point.entity == "distance-listener" ? "衰减监听点" : "基础监听器") +
             "\n" + coordinates + (SpatialHistory != null ? "\n历史位置" : "");
-        if (SpatialHistory is { } history) return $"音源 · 历史位置\n{history.Name}\n{coordinates}\n{history.Moment.Phase} · {DisplayStamp(history.Moment.At)}";
+        if (SpatialHistory is { } history) return $"音源 · 历史位置\n{history.Name}\n{coordinates}\n{history.Moment.Phase} · {DisplayStamp(history.Moment.At)}{SpatialDistanceTip(point)}";
         var state = SpatialCues().For(point);
         var status = !SourceConnected ? "已断开 · 最后状态" : state.Active ? "正在播放" : state.Current.Length > 0 ? "关联已记录，播放状态未确认" : "当前未观测到播放关联";
         var current = state.Current.Length > 0 ? "\n当前关联：" + string.Join(" · ", state.Current.Select(c => c.Name)) : "";
         var last = state.Last is { } cue ? $"\n上次播放：{cue.Name}\n{cue.TimeLabel} · {DisplayStamp(cue.Time)}" : "\n上次播放：未记录";
-        return $"音源 · {status}\n{coordinates}{current}{last}";
+        return $"音源 · {status}\n{coordinates}{current}{last}{SpatialDistanceTip(point)}";
+    }
+    private string SpatialDistanceTip(WireEvent source)
+    {
+        return string.Concat(_spatialListeners.Take(4).Select(listener=>
+        {
+            var measure=SpatialPresentation.Measure(source,listener);
+            var bound=SpatialHistory?.Moment.Distances.Any(d=>d.Bound&&d.Source.objectId==source.objectId&&d.Listener.entity==listener.entity&&d.Listener.objectId==listener.objectId)==true;
+            var type=listener.entity=="distance-listener"?"衰减监听点":"基础监听器";
+            return $"\n到{type}：水平 {measure.Horizontal:0.###} · 高差 {measure.Height:0.###} · 三维 {measure.Spatial:0.###}（{(bound?"绑定":"参考，未确认绑定")}）";
+        }));
     }
     public SpatialViewport SpatialView { get; set; } = new();
     public HistoricalSpatialScene? SpatialHistory { get; set; }

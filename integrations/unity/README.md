@@ -1,8 +1,71 @@
-# Unity outbound capture bridge
+# CriScope Unity SDK
 
-Copy `CriScopeBridge.cs`, `CriScopeNativeRelay.cs`, `CriScopeDiagnostics.cs`, and `CriScopeMonitor.cs` into a Unity project that already uses CRIWARE. No project-specific audio manager hooks are required. Call `CriScope.Unity.CriScopeDiagnostics.Connect("127.0.0.1")` from a debug menu on Unity's main thread; call `Disconnect()` to stop. The previous `SetCaptureEnabled` entry remains compatible. The address is the desktop service, TCP port 18961. `CaptureEnabled`, `Host`, and `Status` are available to that menu. Edit the service address while disabled; enabled capture automatically connects/retries and locks its destination.
+本目录是 Unity SDK 的唯一源码。SDK 版本由 `CriScopeSdk.Version` 定义，独立于桌面发布版本；SDK 版本见该常量及包内 `SDK_MANIFEST.json`；当前传输协议为 CSB3 版本 3。
+游戏工程中的 SDK 文件是分发副本：先在本仓库维护、验证和出包，再同步到宿主工程。不要在游戏副本中维护第二套采集实现。
 
-The implementation is enabled only in the Editor, a Development Build, or with the explicit `CRISCOPE_DIAGNOSTICS` symbol. Never add this symbol to performance-baseline or production builds. Before the first call there is no created component, Update loop, transport thread, polling or callback subscription. CRI's own In-Game Preview setting is independent: if the host initialized Monitor itself, that native overhead predates this extension.
+## 分发与接入
+
+`CriScope-UnitySDK-<version>.zip` 包含三种完整源码配置、稳定的 Unity `.meta`、SHA-256 清单和仅依赖 Python 3.9+ 标准库的 `install.py`。
+
+| 配置 | 用途 |
+| --- | --- |
+| `runtime` | 运行时或 Play 模式；GM 菜单调用 `CriScope.Unity.CriScopeDiagnostics.Connect(ip)` / `Disconnect()` |
+| `editor` | 独立编辑器预览；放在 `Editor` 目录，默认提供 `Tools/Audio/CriScope` 窗口 |
+| `mirror` | 仅供需要序列化脚本镜像的资源工程；保持类型身份，采集接口为空壳，不启动任何传输 |
+
+解压后，在接入包目录运行；目标是工程内专用于 CriScope 的脚本目录：
+
+```powershell
+python install.py sync --profile runtime --target "<Unity工程>/Assets/CriScope"
+python install.py check --profile runtime --target "<Unity工程>/Assets/CriScope"
+python install.py sync --profile editor --target "<Unity工程>/Assets/Editor/CriScope"
+```
+
+同步会保留已有 `.meta` GUID、相同源码的 BOM/换行及目录中的游戏入口。隐藏清单 `.criscope-sdk.json` 记录 SDK 版本、配置、命名空间和副本哈希。
+遇到接入副本的本地源码改动，正常同步会拒绝覆盖；先把需要的修改回收到本仓库。首次接管旧副本时显式使用 `--adopt-existing`，被替换文件会备份到系统临时目录，或由 `--backup-root` 指定位置。
+`--namespace` 支持保留已有命名空间；`editor --no-window` 可保留游戏自己的菜单窗口，只安装 SDK 实现。
+`--config <本地配置.json>` 可批量维护多个工程：
+
+```json
+{"targets":[
+  {"profile":"runtime","target":"<客户端>/Assets/CriScope"},
+  {"profile":"editor","target":"<资源工程>/Assets/Editor/CriScope","namespace":"YourGame.Editor","includeWindow":false},
+  {"profile":"mirror","target":"<资源工程>/Assets/RuntimeMirrors/CriScope"}
+]}
+```
+
+本机项目路径配置应放在 `.local` 等忽略目录，不能写进通用 SDK。
+
+## 宿主职责
+
+`CriScopeCaptureSession.cs` 是 Runtime 与 Editor 共用的采样、目录、回调和资源释放实现；传输与 Monitor 适配也只维护一份源文件。
+编辑器配置由出包工具生成命名空间隔离的副本，避免与资源工程的运行时镜像冲突。
+
+宿主负责先初始化 CRI，再从主线程开启采集。运行时入口保持不变：
+
+```csharp
+CriScope.Unity.CriScopeDiagnostics.Connect("127.0.0.1");
+CriScope.Unity.CriScopeDiagnostics.Disconnect();
+```
+
+独立编辑器可在自己的 `[InitializeOnLoad]` 适配中设置 `CriScopeEditorCapture.InitializeAudio`，用于准备项目已有的音频预览环境；
+`ClientName` 可设置进程显示名。SDK 仅在显式连接且 CRI 尚未初始化时调用初始化委托。项目音频管理器、Lua GM 和菜单入口留在宿主，不进入 SDK。
+窗口关闭、重编译、退出编辑器或切换 Play 模式会断开编辑器采集；SDK 不负责销毁宿主创建的 CRI 库。
+
+## 在本仓库开发
+
+```powershell
+python -m unittest discover -s tests/CriScope.UnitySdkTests
+python tools/unity-sdk.py pack --output artifacts
+python tools/unity-sdk.py check --config .local/integrations/unity-sdk-targets.json
+python tools/unity-sdk.py sync --config .local/integrations/unity-sdk-targets.json
+```
+
+同一 SDK 版本不允许生成内容不同的发行包；发布修改前提升 `CriScopeSdk.Version`。桌面发布脚本会同时生成独立 SDK ZIP，并附带在桌面包的 `UnitySDK/` 中。
+SDK 发送端在握手与开启记录中携带 SDK 版本；原生数据协议仍为版本 3。Pan Type、衰减距离和忽略 Player 参数来自 Cue 配置，不冒充运行时最终增益。
+
+实现只在 Unity Editor、Development Build 或显式 `CRISCOPE_DIAGNOSTICS` 下启用；正式构建保留无采集能力的 API 外壳。
+本仓库不分发 CRI 专有 SDK；宿主需已有对应 CRI API。SDK 关闭后移除自身采样与回调，保留宿主原有 Monitor/预览环境。
 
 ## Monitor ownership
 

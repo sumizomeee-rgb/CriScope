@@ -10,6 +10,14 @@ if ($LASTEXITCODE -ne 0) { throw "发布失败，退出码：$LASTEXITCODE" }
 if (-not (Test-Path -LiteralPath (Join-Path $output 'CriScope.exe'))) { throw '发布结果缺少 CriScope.exe。' }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README-接入.txt') -Destination (Join-Path $output 'README-接入.txt') -Force
 
+# SDK 独立发布，并随桌面包附带。先在仓库维护 SDK，游戏工程只接收发行副本。
+$sdkTool = Join-Path $PSScriptRoot 'unity-sdk.py'
+$sdkArchive = & python $sdkTool pack --output (Join-Path $projectRoot 'artifacts')
+if ($LASTEXITCODE -ne 0) { throw 'Unity SDK 打包失败。' }
+$sdkOutput = Join-Path $output 'UnitySDK'
+New-Item -ItemType Directory -Path $sdkOutput -Force | Out-Null
+Copy-Item -LiteralPath ([string]$sdkArchive) -Destination $sdkOutput -Force
+
 # 重复发布时不能把 EXE 产生的本地录制和日志打进公共发行包。
 Add-Type -AssemblyName System.IO.Compression
 $zip = [IO.Compression.ZipArchive]::new([IO.File]::Open($archive, [IO.FileMode]::Create), [IO.Compression.ZipArchiveMode]::Create)

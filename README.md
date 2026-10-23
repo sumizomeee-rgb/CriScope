@@ -43,7 +43,11 @@ Live 内存每通道最多保留 120 秒或 120,000 条事件，另保留最多 
 
 ## Unity 通用桥接
 
-将 `integrations/unity` 中的 C# 文件复制到已安装 CRI Unity SDK 的工程。在游戏调试菜单主线程调用：
+[`integrations/unity`](integrations/unity/README.md) 是 SDK 唯一源码，维护 Runtime、独立 Editor 与序列化镜像三种分发配置。
+桌面包的 `UnitySDK/` 附带独立、带版本的 SDK ZIP；解压后使用 `install.py sync/check` 接入或校验副本，保留已有 GUID 与游戏入口。
+游戏只维护菜单、GM 和音频初始化适配。SDK 修复先进入本仓库，再出包同步，不能只改游戏副本。
+
+在游戏调试菜单主线程调用：
 
 ```csharp
 CriScope.Unity.CriScopeDiagnostics.Connect("127.0.0.1");
@@ -71,6 +75,8 @@ Monitor 未开启的 Windows x64 客户端可使用严格 DLL SHA-256 与指令�
 ./tools/dotnet.ps1 run --project ./tests/CriScope.AgentTests/CriScope.AgentTests.csproj
 ./tools/dotnet.ps1 run --project ./tests/CriScope.ReleaseGuardTests/CriScope.ReleaseGuardTests.csproj
 ./tools/dotnet.ps1 run --project ./tests/CriScope.UiSmoke/CriScope.UiSmoke.csproj --artifacts-path .local/ui-smoke-build
+python -m unittest discover -s tests/CriScope.UnitySdkTests
+python tools/unity-sdk.py pack --output artifacts
 ./tools/publish.ps1
 ```
 

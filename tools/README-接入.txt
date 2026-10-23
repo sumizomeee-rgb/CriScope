@@ -2,9 +2,10 @@ CriScope · 游戏接入与日志位置
 ========================
 
 1. 运行本目录的 CriScope.exe。软件监听 TCP 18961，游戏可在同机或局域网中连接。
-2. Unity 工程须已接入 CRIWARE。将 CriScopeBridge.cs、CriScopeNativeRelay.cs、
-   CriScopeDiagnostics.cs、CriScopeMonitor.cs 及各自 .meta 放进客户端工程。
-   完整实现与版本说明见 CriScope 源码仓库 integrations/unity/README.md。
+2. Unity 工程须已接入 CRIWARE。解压本目录 UnitySDK/ 中的独立 SDK 接入包，
+   运行 install.py 选择 runtime 或 editor 配置，复制完整实现及 .meta；不要只复制旧版四个脚本。
+   SDK 自带版本、清单与同步校验；游戏只保留 GM/菜单及音频初始化适配。
+   完整实现与版本说明见接入包 README.md 或源码仓库 integrations/unity/README.md。
 3. 仅在 Unity Editor、Development Build 或明确启用 CRISCOPE_DIAGNOSTICS 的
    调试构建中，等 CRI Atom 初始化后从主线程调用：
 
@@ -44,7 +45,11 @@ C 或耳朵按钮定位监听器。进入时全览一次，之后固定取景；
 空间缩放不会改变历史时刻或停止采集。播放状态和 Cue 文字不会改变对象排布槽位。
 地图常态以图标和一行 Cue 名显示；有明确活动 Voice 的音源亮色，空闲或状态
 未确认的音源灰色。上次 Cue 标为“上次”，无关联记录时只显示图标。
-监听点使用独立蓝色；图标外实线圈表示选中，虚线圈表示历史影子。
+地面俯视使用 XZ 等比例投影，Y 为高度。实点始终处于真实坐标，拥挤时图标和
+Cue 标注通过细引线避让；实线选中圈、虚线历史圈均位于坐标点，不随标注偏移。
+监听点使用独立蓝色；同坐标音源和监听点共用实点并保留蓝色外环。
+选中音源可查看到监听点的参考水平距离；Hover 同时显示水平距离、高差与三维距离。
+未确认的绑定明确标为参考。地图上的水平距离不代表最终衰减增益。
 Hover 查看类型、坐标与完整 Cue；同点对象用数量角标，点击可展开。
 点击空闲音源，抽屉可查看上次 Cue，并在实例仍保留时跳回播放轨道。
 选中声音轨道，抽屉“播放时空间状态”提供 Cue Pan Type、开始及结束前的

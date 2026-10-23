@@ -35,6 +35,21 @@ internal sealed class SpatialArrangement
         var items = clusters.Select(c => (Cluster: c, Slot: c.Items
             .Select(e => _slots[(e.session, e.entity, e.objectId)]).MinBy(s => s.Order)!)).OrderBy(p => p.Slot.Order).ToArray();
         var occupied = new List<Rect>();
+        var anchors = items.Select((p,i)=>(Point:view.Project(p.Cluster.Items[0]),Index:i))
+            .Where(p=>view.Plot.Contains(p.Point)).ToArray();
+        var cells = anchors.GroupBy(p=>((int)Math.Floor(p.Point.X/28),(int)Math.Floor(p.Point.Y/28)))
+            .ToDictionary(g=>g.Key,g=>g.ToArray());
+        // Keep crowded coordinate points clear. All nearby glyphs become explicit callouts.
+        foreach(var anchor in anchors)
+            if(IsCrowded(anchor.Point,anchor.Index))occupied.Add(new Rect(anchor.Point.X-6,anchor.Point.Y-6,12,12));
+        bool IsCrowded(Point point,int index)
+        {
+            var x=(int)Math.Floor(point.X/28);var y=(int)Math.Floor(point.Y/28);
+            for(int dx=-1;dx<=1;dx++)for(int dy=-1;dy<=1;dy++)
+                if(cells.TryGetValue((x+dx,y+dy),out var nearby)&&nearby.Any(p=>p.Index!=index&&
+                    Math.Abs(p.Point.X-point.X)<26&&Math.Abs(p.Point.Y-point.Y)<26))return true;
+            return false;
+        }
         var placed = new Dictionary<Slot, SpatialPlacement>();
         // Existing icons retain priority. On first entry, place ALL icons before reserving any labels.
         foreach (var item in items.Where(p => p.Slot.IconOffset != null)) PlaceIcon(item.Cluster, item.Slot);

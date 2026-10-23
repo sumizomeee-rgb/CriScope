@@ -21,7 +21,7 @@ namespace CriScope.Unity
     /// <summary>CSB3 outbound relay. Emit is called only from Unity's main thread.</summary>
     public sealed class CriScopeBridge : IDisposable
     {
-        [Serializable] private sealed class Hello { public int version = 3, pid; public string clientId, captureId, name, machine, platform; }
+        [Serializable] private sealed class Hello { public int version = CriScopeSdk.ProtocolVersion, pid; public string sdkVersion = CriScopeSdk.Version; public string clientId, captureId, name, machine, platform; }
         private sealed class Frame { public byte Channel; public byte[] Data; public long Sequence, Observed; public Gap Evidence; }
         private sealed class Gap { public string Capture, Reason; public byte Channel; public long First, Last, Count; public int Epoch; }
         private readonly object gate = new object();
