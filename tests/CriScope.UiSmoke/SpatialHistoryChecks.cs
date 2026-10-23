@@ -68,6 +68,14 @@ internal static class SpatialHistoryChecks
         check(zeroPan.CuePan.StartsWith("Pan3d"),"Pan Type 的数值零是有效枚举，不是缺失值");
         var linked=events.Single(e=>e.seq==7).Clone();linked.raw="{\"derived\":{\"positionEvidence\":\"{\\\"submittedAtMicroseconds\\\":990000}\"}}";
         check(PlaybackSpatialPresentation.SampleTime(linked)==.99,"关联补发不改写原始位置提交时间");
+        var sample = new WireEvent { time = 10 };
+        check(PlaybackSpatialPresentation.SampleAge(sample, 383.155584) == "6 分 13 秒前"
+            && PlaybackSpatialPresentation.SampleAge(sample, 3671) == "1 时 1 分 1 秒前",
+            "空间样本的长时间差按时分秒显示，避免累计毫秒挤占抽屉");
+        check(PlaybackSpatialPresentation.SampleAge(sample, 10) == "同一时刻"
+            && PlaybackSpatialPresentation.SampleAge(sample, 10.012) == "12 ms 前"
+            && PlaybackSpatialPresentation.SampleAge(sample, 11.25) == "1.25 秒前",
+            "空间样本保留短音效所需的毫秒精度，并以选定观测时刻为基准");
         var interrupted = events.Append(new WireEvent {session=events[0].session,seq=8,time=1.007,kind="gap"}).OrderBy(e=>e.time).ThenBy(e=>e.seq).ToArray();
         var interruptedPlayback=PlaybackPresentation.Group(interrupted,3).Single(p=>p.Id=="pb1");
         check(PlaybackSpatialPresentation.Resolve(interrupted,interruptedPlayback,3).Evidence.Contains("结束位置未确认"),"采集中断的快照保留不完整标记，不声称确认结束现场");
@@ -118,8 +126,12 @@ internal static class SpatialHistoryChecks
         details=Field<StackPanel>("_details");
         check(details.GetVisualDescendants().OfType<SelectableTextBlock>().Any(t=>t.Tag?.ToString()=="spatial:Pan Type · Cue"&&t.Text!.StartsWith("Pos3d")),
             "选中已结束轨道可在抽屉看到 Pan Type 与历史空间记录");
-        check(details.GetLogicalDescendants().OfType<Grid>().Count(row=>row.Tag?.ToString()?.StartsWith("row:spatial:到")==true)==4,
-            "开始和结束两组监听距离使用独立字段，不会在抽屉刷新时互相覆盖");
+        check(details.GetLogicalDescendants().OfType<StackPanel>().Count(row=>row.Tag?.ToString()?.StartsWith("spatial-object:")==true)==6,
+            "开始和结束时的音源与两类监听器分别分组，不会在抽屉刷新时互相覆盖");
+        check(details.GetVisualDescendants().OfType<SelectableTextBlock>().Count(t=>t.Tag?.ToString()=="spatial-distance"&&t.Text=="10")==2
+            && details.GetVisualDescendants().OfType<SelectableTextBlock>().Any(t=>t.Tag?.ToString()=="spatial-position"&&t.Text=="X 6 · Y 8 · Z 0")
+            && details.GetVisualDescendants().OfType<SelectableTextBlock>().Any(t=>t.Tag?.ToString()=="spatial-sample"&&ToolTip.GetTip(t)?.ToString()?.Contains("ms")==true),
+            "空间抽屉突出距离，分开坐标与样本时间，并保留完整采样证据");
         var action=details.GetVisualDescendants().OfType<Button>().Single(b=>b.Tag?.ToString()?.StartsWith("spatial-history:结束前:")==true);
         Click(action);await Task.Delay(180);
         var timeline=Field<TimelineControl>("_timeline");
@@ -127,6 +139,10 @@ internal static class SpatialHistoryChecks
             "查看结束前空间显示已销毁音源的历史影子，并固定在正确时刻");
         check(Field<StackPanel>("_details").GetVisualDescendants().OfType<SelectableTextBlock>().Any(t=>t.Tag?.ToString()=="field:状态"&&t.Text=="历史空间 · 已结束"),
             "历史影子保留原实例已结束状态，不退回实时等待状态");
+        var focus = window.GetVisualDescendants().OfType<Button>().Single(b=>b.Tag?.ToString()=="spatial-focus-listeners");
+        check(focus.GetVisualDescendants().OfType<TextBlock>().Any(t=>t.Text=="定位监听器")
+            && ToolTip.GetTip(focus)?.ToString()=="将所有监听器居中并适配缩放（C）",
+            "监听器定位入口常显文字，说明居中与适配缩放的既有行为");
         var end=timeline.End;timeline.ZoomSpatial(timeline.SpatialView.Plot.Center,4);timeline.PanSpatial(new Vector(80,40));
         check(timeline.End==end&&!timeline.Live,"空间缩放和平移不改变所查历史时刻");
         var viewport=timeline.SpatialView.Clone();window.ApplyUiAction("theme","dark");await Task.Delay(100);
@@ -135,9 +151,10 @@ internal static class SpatialHistoryChecks
             "切换主题保留空间缩放、平移和历史影子");
         window.ApplyUiAction("fit",null);await Task.Delay(100);
         check(timeline.SpatialView.Automatic&&timeline.SpatialHistory!=null&&timeline.End==end,"空间全览保留历史现场并重新容纳所有点");
-        Field<ScrollViewer>("_detailsScroll").Offset=new Vector(0,300);
+        Field<ScrollViewer>("_detailsScroll").Offset=new Vector(0,570);await Task.Delay(180);
         File.WriteAllBytes(Path.GetFullPath(".local/ui-check/spatial-history-dark.png"),window.CapturePng("window"));
         window.ApplyUiAction("theme","light");await Task.Delay(100);
+        Field<ScrollViewer>("_detailsScroll").Offset=new Vector(0,570);await Task.Delay(180);
         File.WriteAllBytes(Path.GetFullPath(".local/ui-check/spatial-history-light.png"),window.CapturePng("window"));
         window.ApplyUiAction("live","true");timeline=Field<TimelineControl>("_timeline");
         check(timeline.SpatialHistory==null&&timeline.Live,"返回实时明确退出历史影子，不把旧位置冒充实时对象");
@@ -146,5 +163,25 @@ internal static class SpatialHistoryChecks
         window.ApplyUiAction("back",null);await Task.Delay(100);
         check(Field<TimelineControl>("_timeline").Mode=="Timeline"&&Field<WireEvent>("_selected").objectId=="pb1",
             "从历史空间返回原播放轨道与选中实例");
+
+        using var active = new Session(new WireEvent {kind="hello",session=Guid.NewGuid().ToString("N"),source="cri-native",channel="native",name="空间抽屉验证",value=1});
+        var activeFixture=Fixture(active.Id);
+        foreach(var e in activeFixture)e.time+=400;
+        // A recent association may carry an older, unchanged coordinate sample.
+        activeFixture[6].raw="{\"derived\":{\"links\":[{\"playback\":\"pb1\"}],\"committedAtMicroseconds\":28944416}}";
+        foreach(var e in activeFixture.Take(7))active.Accept(e);
+        active.Accept(activeFixture[^1]);register(active);
+        window.ApplyUiAction("session",active.Id);window.ApplyUiAction("workspace","Timeline");window.ApplyUiAction("select","5");
+        await Task.Delay(180);
+        foreach(var theme in new[]{"dark","light"})
+        {
+            window.ApplyUiAction("theme",theme);await Task.Delay(150);
+            Field<ScrollViewer>("_detailsScroll").Offset=new Vector(0,570);await Task.Delay(180);
+            File.WriteAllBytes(Path.GetFullPath(".local/ui-check/spatial-inspector-"+theme+".png"),window.CapturePng("inspector"));
+        }
+        var move=activeFixture[6].Clone();move.seq=17;move.time=403;move.x=9;active.Accept(move);await Task.Delay(650);
+        check(Field<StackPanel>("_details").GetVisualDescendants().OfType<SelectableTextBlock>()
+                .Any(t=>t.Tag?.ToString()=="spatial-position"&&t.Text=="X 9 · Y 8 · Z 0"),
+            "播放中抽屉的音源坐标随新样本刷新，分组容器不会冻结旧位置");
     }
 }

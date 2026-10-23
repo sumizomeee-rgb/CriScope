@@ -102,6 +102,19 @@ public static class PlaybackSpatialPresentation
         return "";
     }
 
+    public static string SampleAge(WireEvent e, double at)
+    {
+        var seconds = Math.Max(0, at - SampleTime(e));
+        if (!double.IsFinite(seconds)) return "时间未记录";
+        if (seconds < .0005) return "同一时刻";
+        if (seconds < 1) return $"{seconds * 1000:0.###} ms 前";
+        if (seconds < 60) return $"{seconds:0.###} 秒前";
+        var whole = Math.Floor(seconds);
+        var minutes = Math.Floor(whole / 60) % 60;
+        var remainder = whole % 60;
+        return seconds < 3600 ? $"{minutes:0} 分 {remainder:0} 秒前" : $"{Math.Floor(whole / 3600):0} 时 {minutes:0} 分 {remainder:0} 秒前";
+    }
+
     public static double SampleTime(WireEvent e)
     {
         try

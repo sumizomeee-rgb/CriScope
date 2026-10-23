@@ -92,16 +92,21 @@ public sealed partial class MainWindow
             if (moment.Sources.Length == 0) Row(moment.Phase + "音源", "未记录关联位置");
             foreach (var source in moment.Sources)
             {
-                Row(moment.Sources.Length == 1 ? moment.Phase + "音源" : "音源 " + source.objectId,
-                    Coordinates(source) + "\n" + SampleLabel(source, moment.At), moment.Phase+":"+source.objectId);
+                var group = new StackPanel { Spacing = 9, Margin = new Thickness(10) };
+                var sourceTitle = moment.Sources.Length == 1 ? "音源" : "音源 " + source.objectId;
+                group.Children.Add(SpatialObject(sourceTitle, source, moment.At));
                 foreach (var distance in moment.Distances.Where(d => ReferenceEquals(d.Source, source)))
-                    Row(distance.Listener.entity == "distance-listener" ? "到衰减点" : "到基础监听器",
-                        $"{distance.Value:0.###} 坐标单位 · {(distance.Bound ? "绑定已记录" : "参考距离，绑定未记录")}\n" +
-                        Coordinates(distance.Listener) + "\n" + SampleLabel(distance.Listener, moment.At), moment.Phase+":"+source.objectId+":"+distance.Listener.entity+":"+distance.Listener.objectId);
+                {
+                    group.Children.Add(new Border { Height = 1, Background = _p.Border });
+                    group.Children.Add(SpatialObject(distance.Listener.entity == "distance-listener" ? "衰减监听点" : "基础监听器",
+                        distance.Listener, moment.At, distance));
+                }
+                target.Children.Add(new Grid { Tag = "spatial-source:" + moment.Phase + ":" + source.objectId,
+                    Background = _p.Alternate, Children = { group } });
             }
             if (moment.Sources.Length > 0 && moment.Listeners.Length == 0) Row("监听点", "该时刻未记录", moment.Phase);
             if (moment.PlayerPan != "未记录") Row("Player Pan 设置", moment.PlayerPan + "（请求记录）", moment.Phase);
-            var view = NavigationAction("查看" + moment.Phase + "空间", () =>
+            var view = NavigationAction("查看空间", () =>
             {
                 var latest=SpatialReport(playback, CueConfigurationFor(playback));
                 ShowPlaybackSpace(latest, moment.Phase=="开始时" ? latest.Start : latest.Last);
@@ -114,11 +119,48 @@ public sealed partial class MainWindow
         var note = InspectorValue(evidence, 11, _p.Muted); note.Tag = "spatial-evidence"; section.Children.Add(note);
         details.Children.Add(section);
     }
+    private StackPanel SpatialObject(string title, WireEvent point, double at, SpatialDistance? distance = null)
+    {
+        var listener = point.entity != "source";
+        var color = listener ? _p.Listener : _p.Voice;
+        var content = new StackPanel { Tag = "spatial-object:" + point.entity + ":" + point.objectId, Spacing = 4 };
+        var heading = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 10 };
+        var identity = new Grid { ColumnDefinitions = new ColumnDefinitions("16,*"), ColumnSpacing = 6 };
+        identity.Children.Add(VisualLanguage.Glyph(listener ? IconKind.Listener : IconKind.Source, color, 15));
+        var name = InspectorValue(title, 12, color); Grid.SetColumn(name, 1); identity.Children.Add(name);
+        ToolTip.SetTip(identity, title + " · " + point.objectId);
+        heading.Children.Add(identity);
+        if (distance != null)
+        {
+            var measured = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5, VerticalAlignment = VerticalAlignment.Center };
+            measured.Children.Add(InspectorValue("3D", 11, _p.Muted));
+            var number = InspectorValue($"{distance.Value:0.###}", 16); number.FontWeight = FontWeight.Medium;
+            number.Tag = "spatial-distance"; measured.Children.Add(number);
+            measured.Children.Add(InspectorValue("坐标单位", 11, _p.Muted));
+            ToolTip.SetTip(measured, "3D 直线距离，包含高度差；单位来自游戏坐标。");
+            Grid.SetColumn(measured, 1); heading.Children.Add(measured);
+        }
+        content.Children.Add(heading);
+        var position = InspectorValue(Coordinates(point), 12, _p.Muted); position.Tag = "spatial-position";
+        content.Children.Add(position);
+        var metadata = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 8 };
+        var sample = InspectorValue("位置样本 · " + PlaybackSpatialPresentation.SampleAge(point, at), 11, _p.Muted);
+        sample.Tag = "spatial-sample"; ToolTip.SetTip(sample, SampleLabel(point, at)); metadata.Children.Add(sample);
+        if (distance != null)
+        {
+            var binding = InspectorValue(distance.Bound ? "绑定已记录" : "参考距离", 11, _p.Muted);
+            binding.Tag = "spatial-binding";
+            ToolTip.SetTip(binding, distance.Bound ? "已记录音源与此监听器的绑定。" : "未记录音源与此监听器的绑定；此距离仅供参考。");
+            Grid.SetColumn(binding, 1); metadata.Children.Add(binding);
+        }
+        content.Children.Add(metadata);
+        return content;
+    }
     private static string Coordinates(WireEvent e) => $"X {e.x:0.###} · Y {e.y:0.###} · Z {e.z:0.###}";
     private string SampleLabel(WireEvent e, double at)
     {
         var sample = PlaybackSpatialPresentation.SampleTime(e);
-        return WallTime(sample, _session) + $" · 距该时刻 {Math.Max(0, at - sample) * 1000:0.###} ms";
+        return "采样时间 · " + WallTime(sample, _session) + $"\n早于该观测时刻 {Math.Max(0, at - sample) * 1000:0.###} ms";
     }
     private void ShowPlaybackSpace(PlaybackSpatialReport report, PlaybackSpatialMoment moment)
     {

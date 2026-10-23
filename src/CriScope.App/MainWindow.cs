@@ -318,7 +318,14 @@ public sealed partial class MainWindow : Window
             toolbar.Children.Remove(fit);
             var spatialActions=new StackPanel {Orientation=Orientation.Horizontal,Spacing=4};
             spatialActions.Children.Add(fit);
-            spatialActions.Children.Add(IconAction("定位监听器（C）",IconKind.Listener,()=>_timeline.FocusListeners()));
+            var focusListeners=Action("定位监听器",()=>_timeline.FocusListeners());
+            var focusContent=new StackPanel {Orientation=Orientation.Horizontal,Spacing=6};
+            focusContent.Children.Add(VisualLanguage.Glyph(IconKind.Listener,_p.Listener,18));
+            focusContent.Children.Add(Label("定位监听器"));focusListeners.Content=focusContent;
+            focusListeners.Tag="spatial-focus-listeners";
+            Avalonia.Automation.AutomationProperties.SetName(focusListeners,"定位监听器");
+            ToolTip.SetTip(focusListeners,"将所有监听器居中并适配缩放（C）");
+            spatialActions.Children.Add(focusListeners);
             Grid.SetColumn(spatialActions,4);toolbar.Children.Add(spatialActions);
         }
         if(_mode is "Location" or "Mixing")_windowRange.IsVisible=false;
