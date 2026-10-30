@@ -36,6 +36,14 @@ python install.py sync --profile editor --target "<Unity工程>/Assets/Editor/Cr
 
 本机项目路径配置应放在 `.local` 等忽略目录，不能写进通用 SDK。
 
+## SDK 已连接但没有播放轨道
+
+跨机接收端按客户端身份隔离连接，同一 IP 可接入多个进程。原生采集另需游戏电脑自己的 CRI Monitor，使用本机固定端口 2002/2003。
+Atom Viewer 等试听工具可能在首次点击 CriScope 连接之前就启动原生端口。SDK 1.0.2 起会在启动前检查冲突，在接收端显示游戏电脑名、冲突程序名和 PID。
+释放该工具的原生预览端口后，SDK 在 Unity 主线程按五秒间隔重试 Monitor 初始化，成功后同一桥接连接自动尝试原生订阅；游戏侧不必手动关开采集。
+正在工作的原生连接不重新初始化 Monitor，错误进程不会收到 VERSION/START/STOP。未知 DLL 不反复调用私有初始化入口；项目自行启用 IGP 后仍可恢复。
+SDK 不会自动关闭其他程序。同机多个应用同时使用 CRI 固定端口的任意实例路由仍不受保证；已有连接逐条验证实际服务端 PID。
+
 ## 宿主职责
 
 `CriScopeCaptureSession.cs` 是 Runtime 与 Editor 共用的采样、目录、回调和资源释放实现；传输与 Monitor 适配也只维护一份源文件。

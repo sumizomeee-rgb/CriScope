@@ -30,7 +30,9 @@ namespace CriScope.Unity
         private readonly Stopwatch clock = Stopwatch.StartNew();
         private readonly ManualResetEvent shutdown = new ManualResetEvent(false);
         private readonly AutoResetEvent wake = new AutoResetEvent(false);
-        private readonly string host, helloTemplate, nativeSetupReason;
+        private readonly string host, helloTemplate;
+        private volatile string nativeSetupReason;
+        private volatile bool nativeConnected;
         private readonly int pid;
         private readonly int servicePort, nativePort;
         private readonly Thread worker;
@@ -43,6 +45,9 @@ namespace CriScope.Unity
         private int queuedBytes;
         private const int MaxBytes = 8 * 1024 * 1024, MaxFrames = 8192;
         public string Status { get { return status; } }
+        internal bool NativeConnected { get { return nativeConnected; } }
+        internal void SetNativeSetupReason(string reason)
+        { if (disposed) return; nativeSetupReason = reason; wake.Set(); }
         internal string CaptureId { get { lock (gate) return disposed || captureFault != null ? null : capture; } }
         internal double ClockSeconds { get { return clock.Elapsed.TotalSeconds; } }
         public bool WorkerAlive { get { return worker.IsAlive; } }
@@ -169,13 +174,16 @@ namespace CriScope.Unity
                                 {
                                     try
                                     {
+                                        var setupReason = nativeSetupReason;
+                                        if (!string.IsNullOrEmpty(setupReason)) throw new IOException(setupReason);
                                         var next = new CriScopeNativeRelay(pid, data => Enqueue(1, data), nativePort); lock (gate) relay = next;
-                                        next.Start(); ChannelStatus(1, true, "已核验本机 CRI 进程 · 原生采集中"); status = "服务已连接 · 原生 + SDK 采集中";
+                                        next.Start(); nativeConnected = true; ChannelStatus(1, true, "已核验本机 CRI 进程 · 原生采集中"); status = "服务已连接 · 原生 + SDK 采集中";
                                     }
                                     catch (Exception ex)
                                     {
                                         if (relay != null) relay.Dispose(); lock (gate) relay = null;
-                                        status = "服务已连接 · 原生不可用: " + ex.Message + (nativeSetupReason == null ? "" : "; " + nativeSetupReason); ChannelStatus(1, false, status); retryNativeAt = clock.Elapsed.TotalSeconds + 5;
+                                        nativeConnected = false;
+                                        status = "服务已连接 · 原生不可用: " + ex.Message; ChannelStatus(1, false, status); retryNativeAt = clock.Elapsed.TotalSeconds + 5;
                                     }
                                 }
                                 for (int i = 0; i < 128; i++)
@@ -193,6 +201,7 @@ namespace CriScope.Unity
                     catch (Exception ex) { LastError = ex.ToString(); if (!disposed) status = "等待重连: " + ex.Message; }
                     finally
                     {
+                        nativeConnected = false;
                         CriScopeNativeRelay ending; TcpClient endingRemote;
                         lock (gate)
                         {

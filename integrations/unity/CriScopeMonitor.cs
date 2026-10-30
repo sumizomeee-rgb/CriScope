@@ -24,31 +24,52 @@ namespace CriScope.Unity
 
         internal static bool HasLocalListener()
         {
+            int pid = Process.GetCurrentProcess().Id;
+            foreach (var row in LocalListeners()) if (row.Port == 2002 && row.Pid == pid) return true;
+            return false;
+        }
+        private struct ListenerOwner { public int Port, Pid; }
+        private static ListenerOwner[] LocalListeners()
+        {
             int size = 0;
-            uint result = GetExtendedTcpTable(IntPtr.Zero, ref size, false, 2, 3, 0); // IPv4, owner PID listeners
+            uint result = GetExtendedTcpTable(IntPtr.Zero, ref size, false, 2, 3, 0);
             if (result != 122 && result != 0) throw new IOException("Cannot inspect Monitor listener: " + result);
             IntPtr buffer = Marshal.AllocHGlobal(size);
             try
             {
                 result = GetExtendedTcpTable(buffer, ref size, false, 2, 3, 0);
                 if (result != 0) throw new IOException("Cannot inspect Monitor listener: " + result);
-                int count = Marshal.ReadInt32(buffer), pid = Process.GetCurrentProcess().Id;
+                int count = Marshal.ReadInt32(buffer);
+                if (count < 0 || count > (size - 4) / 24) throw new IOException("Invalid Monitor listener table");
+                var rows = new System.Collections.Generic.List<ListenerOwner>();
                 for (int i = 0; i < count; i++)
                 {
                     IntPtr row = IntPtr.Add(buffer, 4 + i * 24);
-                    int port = (Marshal.ReadByte(row, 8) << 8) | Marshal.ReadByte(row, 9);
-                    if (port == 2002 && Marshal.ReadInt32(row, 20) == pid) return true;
+                    rows.Add(new ListenerOwner { Port = (Marshal.ReadByte(row, 8) << 8) | Marshal.ReadByte(row, 9), Pid = Marshal.ReadInt32(row, 20) });
                 }
-                return false;
+                return rows.ToArray();
             }
             finally { Marshal.FreeHGlobal(buffer); }
+        }
+        internal static string PortConflict(int pid, int dataPort = 2002, int controlPort = 2003)
+        {
+            var owners = new System.Collections.Generic.SortedDictionary<int, string>();
+            foreach (var row in LocalListeners())
+                if ((row.Port == dataPort || row.Port == controlPort) && row.Pid != pid)
+                    owners[row.Pid] = CriScopeNativeRelay.DescribeProcess(row.Pid);
+            if (owners.Count == 0) return null;
+            return "游戏电脑 " + Environment.MachineName + " 的 CRI 端口 " + dataPort + "/" + controlPort + " 被 " +
+                string.Join("、", new System.Collections.Generic.List<string>(owners.Values).ToArray()) +
+                " 使用；当前 " + CriScopeNativeRelay.DescribeProcess(pid) + "。释放该工具的原生预览端口后，CriScope 会自动重试。";
         }
 
         public void Start()
         {
 #if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
             if (!CriWare.CriAtomPlugin.IsLibraryInitialized()) throw new InvalidOperationException("Atom has not initialized.");
-            if (HasLocalListener()) { Status = "Existing Monitor :2002 (owned by target; preserved on stop)"; return; }
+            var conflict = PortConflict(Process.GetCurrentProcess().Id);
+            if (conflict != null) throw new IOException(conflict);
+            if (HasLocalListener()) { Status = "Target Monitor listener :2002 (connection still requires PID verification)"; return; }
             if (IntPtr.Size != 8) throw new NotSupportedException("Monitor hot toggle requires Windows x64.");
             ProcessModule module = null;
             using (var process = Process.GetCurrentProcess())
@@ -91,6 +112,40 @@ namespace CriScope.Unity
             owned = false;
             if (CriWare.CriAtomPlugin.IsLibraryInitialized()) finish();
             Status = "Monitor stopped";
+        }
+    }
+
+    // Called on the Unity main thread. A failed TCP retry cannot initialize a missing Monitor.
+    internal sealed class CriScopeMonitorRecovery
+    {
+        private readonly Action start;
+        private readonly Func<bool> available;
+        private double nextAttempt = double.NegativeInfinity;
+        private bool ready, unsupported;
+        internal string Reason { get; private set; }
+        internal CriScopeMonitorRecovery(Action start, Func<bool> available)
+        { this.start = start; this.available = available; }
+        internal bool Tick(double now, bool nativeConnected)
+        {
+            if (nativeConnected || now < nextAttempt) return false;
+            nextAttempt = now + 5;
+            try
+            {
+                if (unsupported)
+                {
+                    // A project may later enable its own supported IGP path; never retry a private call.
+                    if (!available()) return false;
+                    ready = true; unsupported = false; Reason = null; return true;
+                }
+                if (ready && available()) return false;
+                start(); ready = true; Reason = null;
+            }
+            catch (Exception error)
+            {
+                ready = false; Reason = "原生启动不可用：" + error.Message;
+                unsupported = error is NotSupportedException;
+            }
+            return true;
         }
     }
 }

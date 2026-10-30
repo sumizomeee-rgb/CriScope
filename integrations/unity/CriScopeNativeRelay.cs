@@ -42,7 +42,9 @@ namespace CriScope.Unity
             var server = (IPEndPoint)client.Client.RemoteEndPoint;
             int owner = 0;
             for (int i = 0; i < 20 && owner == 0 && !disposed; i++) { owner = FindServerOwner(server, local); if (owner == 0) stop.WaitOne(10); }
-            if (owner != expectedPid) throw new IOException(owner == 0 ? "无法核验原生连接所属进程，已拒绝采集" : "原生端口属于另一进程 " + owner + "，当前进程 " + expectedPid + "；已拒绝采集");
+            if (owner != expectedPid) throw new IOException(owner == 0 ? "无法核验本机原生连接所属进程，已拒绝采集" :
+                "本机 " + Environment.MachineName + " 的原生端口 :" + port + " 实际连到了 " + DescribeProcess(owner) +
+                "，当前为 " + DescribeProcess(expectedPid) + "；进程不符，已拒绝采集。这是本机原生端口冲突。");
             using (var process = Process.GetProcessById(owner))
                 if (process.HasExited || process.StartTime.ToUniversalTime().Ticks != expectedStart) throw new IOException("原生连接进程生命周期不匹配，已拒绝采集");
             // No command is sent before owner verification; never STOP another process's recorder.
@@ -53,6 +55,11 @@ namespace CriScope.Unity
 #else
             throw new NotSupportedException("Native socket ownership verification currently supports Windows only");
 #endif
+        }
+        internal static string DescribeProcess(int pid)
+        {
+            try { using (var process = Process.GetProcessById(pid)) return process.ProcessName + " (PID " + pid + ")"; }
+            catch (Exception) { return "进程 PID " + pid; }
         }
         private static int FindServerOwner(IPEndPoint local, IPEndPoint remote)
         {

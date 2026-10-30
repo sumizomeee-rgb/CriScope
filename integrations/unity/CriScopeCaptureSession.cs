@@ -13,6 +13,7 @@ namespace CriScope.Unity
     {
         private CriScopeBridge bridge;
         private CriScopeMonitor monitor;
+        private CriScopeMonitorRecovery monitorRecovery;
         private string monitorNote;
         private bool subscribed, closing;
         private double nextSample, nextMemorySample, nextCategoryCatalogSample, lastCategoryCatalogEmit;
@@ -39,7 +40,7 @@ namespace CriScope.Unity
         private CriScopeCaptureSession(Func<double> clock) { this.clock = clock; }
         public bool CaptureEnabled { get { return bridge != null && !closing; } }
         public string Status { get { return bridge == null ? stoppedStatus : bridge.Status +
-            (string.IsNullOrEmpty(monitorNote) ? "" : " | " + monitorNote); } }
+            (string.IsNullOrEmpty(monitorNote) || bridge.Status.IndexOf(monitorNote, StringComparison.Ordinal) >= 0 ? "" : " | " + monitorNote); } }
         public static CriScopeCaptureSession Start(string host, string clientName, Func<double> clock)
         {
             if (!CriAtomPlugin.IsLibraryInitialized()) throw new InvalidOperationException("CRI Atom 尚未初始化");
@@ -47,8 +48,9 @@ namespace CriScope.Unity
             try
             {
                 session.monitor = new CriScopeMonitor();
-                try { session.monitor.Start(); }
-                catch (Exception error) { session.monitorNote = "原生启动不可用：" + error.Message; }
+                session.monitorRecovery = new CriScopeMonitorRecovery(session.monitor.Start, CriScopeMonitor.HasLocalListener);
+                session.monitorRecovery.Tick(clock(), false);
+                session.monitorNote = session.monitorRecovery.Reason;
                 session.bridge = new CriScopeBridge(host, clientName, Application.platform.ToString(),
                     System.Diagnostics.Process.GetCurrentProcess().Id, session.monitorNote);
                 CriAtomExBeatSync.OnCallback += session.Beat;
@@ -67,6 +69,11 @@ namespace CriScope.Unity
             if (!CriAtomPlugin.IsLibraryInitialized()) { Dispose(); return; }
             try
             {
+                if (monitorRecovery.Tick(clock(), bridge.NativeConnected))
+                {
+                    monitorNote = monitorRecovery.Reason;
+                    bridge.SetNativeSetupReason(monitorNote);
+                }
                 RefreshCapture();
                 if (clock() >= nextSample)
                 {

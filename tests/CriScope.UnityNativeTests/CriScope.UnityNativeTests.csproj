@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings><Nullable>disable</Nullable>
+    <DefineConstants>CRISCOPE_DIAGNOSTICS;UNITY_STANDALONE_WIN</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../integrations/unity/CriScopeBridge.cs" Link="Sdk/CriScopeBridge.cs" />
+    <Compile Include="../../integrations/unity/CriScopeNativeRelay.cs" Link="Sdk/CriScopeNativeRelay.cs" />
+    <Compile Include="../../integrations/unity/CriScopeMonitor.cs" Link="Sdk/CriScopeMonitor.cs" />
+    <Compile Include="../../integrations/unity/CriScopeSdk.cs" Link="Sdk/CriScopeSdk.cs" />
+  </ItemGroup>
+</Project>

@@ -9,7 +9,7 @@ CriScope 是独立的 Windows CRI 音频观测工具，使用 .NET 10 与 Avalon
 3. 桌面左侧每个进程实例一张卡片；同一卡片整合原生与 SDK 通道状态，原始日志各自保留独立时钟。通过声音时间线、控制、混音、空间、资源查看数据。事件日志支持实时搜索播放、结束、参数与回调，双击定位轨道；播放与空间支持双向定位和返回。详见 [v0.6 操作与验证说明](docs/V06_DELIVERY.md)。
 4. 客户端接入后，各通道自动写入物理日志；界面显示当前文件路径，可从“更多”打开日志目录。“导入日志…”选择一个 `.criscope` 或 `.jsonl` 文件，在左侧新增只读历史会话，不移动或修改原文件。记录不包含声音。“导出问题包”包含选区（没有选区则为可见范围）、伴随通道可用记录、当前界面截图、问题描述及缺失说明。
 
-支持多台电脑回连。同机多个游戏的 SDK 通道可接入，但当前 CRI 固定原生端口不能保证每个进程同时采集；桥接验证端口所属 PID，错误进程明确拒绝，绝不把别的游戏数据显示到当前卡片。
+支持多台电脑、多进程回连，接收端按客户端身份隔离连接，不按 IP 限制为单进程。同一台游戏电脑的 CRI 原生 Monitor 使用固定端口 2002/2003；Atom Viewer 等试听工具或其他游戏可能先使用它们。SDK 会报告该电脑的冲突程序名与 PID，并在端口释放后自动重试 Monitor 初始化及原生连接。已存在的原生连接仍会验证实际服务端 PID；同机多应用同时使用固定端口的原生采集仍受 CRI 限制。
 
 Live 内存每通道最多保留 120 秒或 120,000 条事件，另保留最多 8,192 项已观测状态（保留原始时间）。AISAC/Selector 写入时的播放关联会在采集时冻结；较旧证据缺失时按需查询本次连接的物理日志，不把日志全部载入 Live 会话。日志轮转时保存明确标记的活动状态基线，之后追加新事件。冻结只暂停视图，点击事件不会自动冻结。历史单文件最多加载 2,000,000 条事件，该上限不代表已验证的交互性能。
 
@@ -75,6 +75,7 @@ Monitor 未开启的 Windows x64 客户端可使用严格 DLL SHA-256 与指令�
 ./tools/dotnet.ps1 run --project ./tests/CriScope.AgentTests/CriScope.AgentTests.csproj
 ./tools/dotnet.ps1 run --project ./tests/CriScope.ReleaseGuardTests/CriScope.ReleaseGuardTests.csproj
 ./tools/dotnet.ps1 run --project ./tests/CriScope.UiSmoke/CriScope.UiSmoke.csproj --artifacts-path .local/ui-smoke-build
+./tools/dotnet.ps1 run --project ./tests/CriScope.UnityNativeTests/CriScope.UnityNativeTests.csproj
 python -m unittest discover -s tests/CriScope.UnitySdkTests
 python tools/unity-sdk.py pack --output artifacts
 ./tools/publish.ps1
