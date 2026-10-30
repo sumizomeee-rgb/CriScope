@@ -107,6 +107,25 @@ class SdkDeliveryTests(unittest.TestCase):
                 sdk.sync_or_check(arguments)
             self.assertEqual(path.read_bytes(),b'\xef\xbb\xbf'+original.replace(b'\n',b'\r\n')+b'// upstream update\r\n')
 
+    def test_manifest_meta_is_checked_repaired_and_preserved(self):
+        with tempfile.TemporaryDirectory(prefix='criscope-sdk-') as tmp:
+            target=Path(tmp)/'Editor'/'CriScope'
+            self.run_tool('sync','--profile','editor','--target',target)
+            path=target/(sdk.STAMP+'.meta')
+            self.assertTrue(path.is_file())
+            original=path.read_bytes()
+            self.assertIn(b'TextScriptImporter:',original)
+            path.unlink()
+            result=self.run_tool('check','--profile','editor','--target',target,ok=False)
+            self.assertIn('missing '+path.name,result.stdout)
+            self.run_tool('sync','--profile','editor','--target',target)
+            self.assertEqual(path.read_bytes(),original)
+            custom=b'fileFormatVersion: 2\nguid: 22222222222222222222222222222222\nTextScriptImporter:\n  externalObjects: {}\n'
+            path.write_bytes(custom)
+            self.run_tool('sync','--profile','editor','--target',target)
+            self.run_tool('check','--profile','editor','--target',target)
+            self.assertEqual(path.read_bytes(),custom)
+
     def test_invalid_editor_destination_is_rejected(self):
         with tempfile.TemporaryDirectory(prefix='criscope-sdk-') as tmp:
             result=self.run_tool('sync','--profile','editor','--target',Path(tmp)/'Runtime',ok=False)

@@ -57,6 +57,10 @@ def namespace(value):
 def meta(profile, name):
     key = ('runtime' if profile == 'mirror' else profile)+'/'+name
     guid = uuid.uuid5(GUID_SEED, key).hex
+    if name == STAMP:
+        # Unity ignores dotfiles, but source-control hooks may still require a paired meta.
+        return ('fileFormatVersion: 2\nguid: '+guid+'\nTextScriptImporter:\n  externalObjects: {}\n'
+                '  userData: \n  assetBundleName: \n  assetBundleVariant: \n').encode('utf-8')
     return ('fileFormatVersion: 2\nguid: '+guid+'\nMonoImporter:\n  externalObjects: {}\n  serializedVersion: 2\n'
             '  defaultReferences: []\n  executionOrder: 0\n  icon: {instanceID: 0}\n  userData: \n'
             '  assetBundleName: \n  assetBundleVariant: \n').encode('utf-8')
@@ -97,6 +101,7 @@ def load_sdk(root=None):
                 text = text.replace('#if UNITY_EDITOR || DEVELOPMENT_BUILD || CRISCOPE_DIAGNOSTICS', '#if UNITY_EDITOR')
             files[name] = text.encode('utf-8')
             files[name+'.meta'] = meta(profile, name)
+        files[STAMP+'.meta'] = meta(profile, STAMP)
         profiles[profile] = files
     return version, protocol, profiles
 

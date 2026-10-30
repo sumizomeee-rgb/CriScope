@@ -21,7 +21,7 @@ python install.py check --profile runtime --target "<Unity工程>/Assets/CriScop
 python install.py sync --profile editor --target "<Unity工程>/Assets/Editor/CriScope"
 ```
 
-同步会保留已有 `.meta` GUID、相同源码的 BOM/换行及目录中的游戏入口。隐藏清单 `.criscope-sdk.json` 记录 SDK 版本、配置、命名空间和副本哈希。
+同步会保留已有 `.meta` GUID、相同源码的 BOM/换行及目录中的游戏入口。隐藏清单 `.criscope-sdk.json` 记录 SDK 版本、配置、命名空间和副本哈希。同步同时生成配套 `.criscope-sdk.json.meta`，满足宿主工程 SVN 钩子的文件配对要求；两者一起提交，已有 GUID 保持不变。
 遇到接入副本的本地源码改动，正常同步会拒绝覆盖；先把需要的修改回收到本仓库。首次接管旧副本时显式使用 `--adopt-existing`，被替换文件会备份到系统临时目录，或由 `--backup-root` 指定位置。
 `--namespace` 支持保留已有命名空间；`editor --no-window` 可保留游戏自己的菜单窗口，只安装 SDK 实现。
 `--config <本地配置.json>` 可批量维护多个工程：
